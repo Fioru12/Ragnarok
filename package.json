@@ -1,0 +1,14 @@
+{
+  "name": "ragnarok-soc",
+  "version": "1.0.0",
+  "description": "Asgard Suite AI SOC Orchestrator powered by Tauri and Python",
+  "main": "index.js",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@tauri-apps/cli": "^1.5.0"
+  }
+}
