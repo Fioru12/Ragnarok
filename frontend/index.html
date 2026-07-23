@@ -3,236 +3,541 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Asgard SOC | Enterprise Command Center</title>
+    <title>Asgard Enterprise SOC | Command Center</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        body { background: #07090e; color: #e2e8f0; font-family: 'Segoe UI', system-ui, sans-serif; }
-        .glow { box-shadow: 0 0 30px rgba(0, 212, 255, 0.1); }
-        .glow-purple { box-shadow: 0 0 30px rgba(168, 85, 247, 0.1); }
-        .terminal-scroll::-webkit-scrollbar { width: 6px; }
-        .terminal-scroll::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 3px; }
+        :root { --accent: #0071e3; --accent-glow: rgba(0, 113, 227, 0.2); }
+        body { background: #000000; color: #f5f5f7; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", Roboto, sans-serif; -webkit-font-smoothing: antialiased; }
+        .apple-glass { background: rgba(22, 22, 24, 0.75); backdrop-filter: blur(25px); -webkit-backdrop-filter: blur(25px); border: 1px solid rgba(255, 255, 255, 0.08); }
+        .apple-glass-hover:hover { background: rgba(35, 35, 38, 0.85); border-color: rgba(255, 255, 255, 0.15); }
+        .apple-glow { box-shadow: 0 0 50px var(--accent-glow); }
+        .accent-bg { background-color: var(--accent); }
+        .accent-text { color: var(--accent); }
+        .terminal-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+        .terminal-scroll::-webkit-scrollbar-thumb { background: #3a3a3c; border-radius: 3px; }
+        @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        .animate-slide { animation: slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
     </style>
 </head>
-<body class="h-screen flex flex-col overflow-hidden selection:bg-cyan-500 selection:text-black">
+<body class="h-screen flex overflow-hidden selection:bg-blue-500 selection:text-white">
 
-    <!-- Top Navigation Bar -->
-    <header class="bg-[#0b0e17] border-b border-[#1a2234] px-6 py-3 flex justify-between items-center z-20">
-        <div class="flex items-center space-x-4">
-            <div class="flex items-center space-x-2">
-                <div class="w-3 h-3 rounded-full bg-cyan-400 animate-pulse"></div>
-                <span class="text-xl font-black tracking-widest bg-gradient-to-r from-cyan-400 via-indigo-400 to-purple-500 bg-clip-text text-transparent">ASGARD SOC</span>
+    <!-- APPLE-STYLE SIDEBAR -->
+    <aside class="w-64 bg-[#000000] border-r border-[#1d1d1f] flex flex-col z-20">
+        <div class="p-6 border-b border-[#1d1d1f] flex items-center space-x-3">
+            <div id="sidebarLogo" class="w-8 h-8 rounded-full accent-bg flex items-center justify-center font-bold text-white text-xs shadow-lg transition-all duration-300">AS</div>
+            <div>
+                <h1 class="text-xs font-bold tracking-tight text-white uppercase">Asgard SOC</h1>
+                <span class="text-[9px] font-mono text-slate-500">UNIVERSAL LLM SOAR</span>
             </div>
-            <span class="text-xs uppercase px-2.5 py-1 bg-cyan-950/80 text-cyan-400 border border-cyan-800/60 rounded-full font-mono">Enterprise Edition v2.6</span>
         </div>
 
-        <!-- Navigation Tabs -->
-        <nav class="flex space-x-2 bg-[#080b12] p-1 border border-[#1a2234] rounded-lg">
-            <button onclick="switchTab('chat')" id="tab-chat" class="px-4 py-1.5 text-xs font-semibold uppercase tracking-wider rounded-md transition bg-cyan-600 text-white shadow">AI Orchestrator</button>
-            <button onclick="switchTab('arsenal')" id="tab-arsenal" class="px-4 py-1.5 text-xs font-semibold uppercase tracking-wider rounded-md transition text-slate-400 hover:text-white">Arsenal & Tools</button>
-            <button onclick="switchTab('terminal')" id="tab-terminal" class="px-4 py-1.5 text-xs font-semibold uppercase tracking-wider rounded-md transition text-slate-400 hover:text-white">Live Terminal</button>
+        <div class="px-5 py-3 text-[10px] font-mono text-slate-600 uppercase tracking-widest flex justify-between items-center">
+            <span>Workspaces</span>
+            <span class="text-[9px] bg-[#1c1c1e] px-1.5 py-0.5 rounded text-slate-400">Ctrl+1..8</span>
+        </div>
+        <nav class="flex-1 px-3 space-y-1 overflow-y-auto text-xs font-medium">
+            <button onclick="switchTab('overview')" id="nav-overview" class="w-full flex items-center justify-between px-3.5 py-2.5 rounded-full transition bg-white/10 text-white font-semibold">
+                <span class="flex items-center space-x-3"><span>📊</span> <span>Overview</span></span>
+            </button>
+            <button onclick="switchTab('heimdall')" id="nav-heimdall" class="w-full flex items-center justify-between px-3.5 py-2.5 rounded-full transition text-slate-400 hover:text-white hover:bg-white/5">
+                <span class="flex items-center space-x-3"><span class="w-2 h-2 rounded-full bg-pink-500"></span> <span>Heimdall HIDS</span></span>
+            </button>
+            <button onclick="switchTab('mjolnir')" id="nav-mjolnir" class="w-full flex items-center justify-between px-3.5 py-2.5 rounded-full transition text-slate-400 hover:text-white hover:bg-white/5">
+                <span class="flex items-center space-x-3"><span class="w-2 h-2 rounded-full bg-amber-500"></span> <span>Mjolnir Triage</span></span>
+            </button>
+            <button onclick="switchTab('bifrost')" id="nav-bifrost" class="w-full flex items-center justify-between px-3.5 py-2.5 rounded-full transition text-slate-400 hover:text-white hover:bg-white/5">
+                <span class="flex items-center space-x-3"><span class="w-2 h-2 rounded-full bg-cyan-500"></span> <span>Bifrost Network</span></span>
+            </button>
+            <button onclick="switchTab('yggdrasil')" id="nav-yggdrasil" class="w-full flex items-center justify-between px-3.5 py-2.5 rounded-full transition text-slate-400 hover:text-white hover:bg-white/5">
+                <span class="flex items-center space-x-3"><span class="w-2 h-2 rounded-full bg-blue-500"></span> <span>Yggdrasil AD</span></span>
+            </button>
+            <button onclick="switchTab('fenrir')" id="nav-fenrir" class="w-full flex items-center justify-between px-3.5 py-2.5 rounded-full transition text-slate-400 hover:text-white hover:bg-white/5">
+                <span class="flex items-center space-x-3"><span class="w-2 h-2 rounded-full bg-red-500"></span> <span>Fenrir CTI</span></span>
+            </button>
+            <button onclick="switchTab('sleipnir')" id="nav-sleipnir" class="w-full flex items-center justify-between px-3.5 py-2.5 rounded-full transition text-slate-400 hover:text-white hover:bg-white/5">
+                <span class="flex items-center space-x-3"><span class="w-2 h-2 rounded-full bg-purple-500"></span> <span>Sleipnir SOAR</span></span>
+            </button>
+            <button onclick="switchTab('ai')" id="nav-ai" class="w-full flex items-center justify-between px-3.5 py-2.5 rounded-full transition text-slate-400 hover:text-white hover:bg-white/5">
+                <span class="flex items-center space-x-3"><span>🤖</span> <span>AI Assistant</span></span>
+            </button>
         </nav>
 
-        <div class="flex items-center space-x-3 text-xs text-slate-400 font-mono">
-            <span class="px-3 py-1 bg-[#111622] border border-[#1a2234] rounded flex items-center"><span class="w-2 h-2 rounded-full bg-emerald-500 mr-2"></span> System Online</span>
+        <div class="p-4 border-t border-[#1d1d1f] text-xs">
+            <button onclick="openSettings()" class="w-full py-2.5 bg-[#1c1c1e] hover:bg-[#2c2c2e] rounded-full text-slate-200 transition flex items-center justify-center space-x-2 font-medium shadow-sm">
+                <span>⚙️</span> <span>LLM & Settings</span>
+            </button>
         </div>
-    </header>
+    </aside>
 
-    <!-- Main Workspace -->
-    <div class="flex-1 flex overflow-hidden">
+    <!-- MAIN CONTENT AREA -->
+    <main class="flex-1 flex flex-col overflow-hidden bg-[#000000]">
 
-        <!-- Left Sidebar: Modules Status -->
-        <aside class="w-72 bg-[#090c14] border-r border-[#1a2234] p-5 flex flex-col space-y-5 overflow-y-auto z-10">
-            <h2 class="text-xs font-bold uppercase tracking-widest text-slate-400 font-mono">Active Defenses</h2>
-            
-            <div class="space-y-2.5">
-                <div class="p-3 bg-[#0e1320] border border-[#1a2234] rounded-lg hover:border-pink-500/50 transition">
-                    <div class="flex justify-between items-center mb-1"><span class="font-bold text-sm text-pink-400">Heimdall</span><span class="text-[10px] text-emerald-400 font-mono bg-emerald-950/50 px-1.5 py-0.5 rounded">HIDS</span></div>
-                    <p class="text-xs text-slate-400">Log Parser & Active Firewall</p>
-                </div>
-                <div class="p-3 bg-[#0e1320] border border-[#1a2234] rounded-lg hover:border-amber-500/50 transition">
-                    <div class="flex justify-between items-center mb-1"><span class="font-bold text-sm text-amber-400">Mjolnir</span><span class="text-[10px] text-amber-400 font-mono bg-amber-950/50 px-1.5 py-0.5 rounded">Triage</span></div>
-                    <p class="text-xs text-slate-400">Forensics & VirusTotal API</p>
-                </div>
-                <div class="p-3 bg-[#0e1320] border border-[#1a2234] rounded-lg hover:border-cyan-500/50 transition">
-                    <div class="flex justify-between items-center mb-1"><span class="font-bold text-sm text-cyan-400">Bifrost</span><span class="text-[10px] text-cyan-400 font-mono bg-cyan-950/50 px-1.5 py-0.5 rounded">Network</span></div>
-                    <p class="text-xs text-slate-400">Port Scanner & AES Reports</p>
-                </div>
-                <div class="p-3 bg-[#0e1320] border border-[#1a2234] rounded-lg hover:border-blue-500/50 transition">
-                    <div class="flex justify-between items-center mb-1"><span class="font-bold text-sm text-blue-400">Yggdrasil</span><span class="text-[10px] text-blue-400 font-mono bg-blue-950/50 px-1.5 py-0.5 rounded">AD Audit</span></div>
-                    <p class="text-xs text-slate-400">GPO & Password Policy</p>
-                </div>
-                <div class="p-3 bg-[#0e1320] border border-[#1a2234] rounded-lg hover:border-red-500/50 transition">
-                    <div class="flex justify-between items-center mb-1"><span class="font-bold text-sm text-red-400">Fenrir</span><span class="text-[10px] text-red-400 font-mono bg-red-950/50 px-1.5 py-0.5 rounded">CTI</span></div>
-                    <p class="text-xs text-slate-400">Threat Intel Feeds & CISA KEV</p>
-                </div>
-                <div class="p-3 bg-[#0e1320] border border-[#1a2234] rounded-lg hover:border-purple-500/50 transition">
-                    <div class="flex justify-between items-center mb-1"><span class="font-bold text-sm text-purple-400">Sleipnir</span><span class="text-[10px] text-purple-400 font-mono bg-purple-950/50 px-1.5 py-0.5 rounded">SOAR</span></div>
-                    <p class="text-xs text-slate-400">YAML Playbook Automation</p>
-                </div>
+        <!-- Top Header Bar -->
+        <header class="h-16 bg-[#000000]/80 border-b border-[#1d1d1f] px-8 flex justify-between items-center z-10 backdrop-blur-md">
+            <div class="flex items-center space-x-3">
+                <span id="pageTitle" class="text-sm font-semibold text-white tracking-wide">Overview Dashboard</span>
             </div>
-
-            <div class="mt-auto pt-4 border-t border-[#1a2234]">
-                <div class="text-[10px] font-mono text-slate-500 uppercase tracking-wider mb-2">Quick Triggers</div>
-                <button onclick="quickAction('Run Mjolnir triage')" class="w-full mb-1.5 py-2 px-3 bg-[#111622] hover:bg-[#182033] border border-[#1a2234] rounded text-xs text-left transition text-slate-300">⚡ Run Mjolnir Triage</button>
-                <button onclick="quickAction('Scan ports with Bifrost')" class="w-full mb-1.5 py-2 px-3 bg-[#111622] hover:bg-[#182033] border border-[#1a2234] rounded text-xs text-left transition text-slate-300">🔍 Bifrost Network Scan</button>
-                <button onclick="quickAction('Run Sleipnir SOAR playbook')" class="w-full py-2 px-3 bg-[#111622] hover:bg-[#182033] border border-[#1a2234] rounded text-xs text-left transition text-slate-300">🔮 Run SOAR Playbook</button>
+            <div class="flex items-center space-x-4 text-xs font-mono">
+                <span class="px-3.5 py-1.5 bg-[#1c1c1e] rounded-full flex items-center text-emerald-400 shadow-sm border border-white/5">
+                    <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse mr-2"></span> <span id="llmIndicator">6/6 Systems Online</span>
+                </span>
             </div>
-        </aside>
+        </header>
 
-        <!-- Right Content Panels -->
-        <main class="flex-1 flex flex-col bg-[#07090e] overflow-hidden relative">
+        <!-- Dynamic Workspace Content -->
+        <div class="flex-1 overflow-y-auto p-10 space-y-8 animate-slide">
 
-            <!-- TAB 1: AI ORCHESTRATOR CHAT -->
-            <div id="panel-chat" class="flex-1 flex flex-col h-full">
-                <div id="chatBox" class="flex-1 p-6 overflow-y-auto terminal-scroll space-y-4">
-                    <div class="flex items-start space-x-3">
-                        <div class="w-8 h-8 rounded bg-cyan-950 border border-cyan-700 flex items-center justify-center text-cyan-400 font-bold text-xs shrink-0 font-mono">AI</div>
-                        <div class="bg-[#0f1422] border border-[#1a2234] p-4 rounded-xl max-w-3xl text-sm leading-relaxed shadow-lg">
-                            <span class="text-xs font-mono text-cyan-400 block mb-1">Ragnarök Core Assistant</span>
-                            Welcome back, Analyst. All 6 defense modules are online and synchronized with the SOAR engine. Type a command below or click a quick trigger to execute security tasks instantly.
-                        </div>
+            <!---------------- 1. DASHBOARD OVERVIEW ---------------->
+            <div id="panel-overview" class="space-y-8 max-w-7xl mx-auto">
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
+                    <div class="apple-glass p-6 rounded-3xl apple-glow">
+                        <span class="text-[10px] font-mono accent-text uppercase tracking-widest font-semibold">Active Defenses</span>
+                        <h3 class="text-3xl font-bold mt-2 text-white">6 / 6</h3>
+                        <p class="text-xs text-slate-400 mt-1">All subsystems operational</p>
+                    </div>
+                    <div class="apple-glass p-6 rounded-3xl">
+                        <span class="text-[10px] font-mono text-pink-400 uppercase tracking-widest font-semibold">HIDS Engine</span>
+                        <h3 class="text-3xl font-bold mt-2 text-white">YAML Active</h3>
+                        <p class="text-xs text-slate-400 mt-1">Sliding-window threshold ready</p>
+                    </div>
+                    <div class="apple-glass p-6 rounded-3xl">
+                        <span class="text-[10px] font-mono text-amber-400 uppercase tracking-widest font-semibold">VirusTotal API</span>
+                        <h3 class="text-3xl font-bold mt-2 text-white">Connected</h3>
+                        <p class="text-xs text-slate-400 mt-1">Hash verification enabled</p>
+                    </div>
+                    <div class="apple-glass p-6 rounded-3xl">
+                        <span class="text-[10px] font-mono text-purple-400 uppercase tracking-widest font-semibold">SOAR Pipelines</span>
+                        <h3 class="text-3xl font-bold mt-2 text-white">Ready</h3>
+                        <p class="text-xs text-slate-400 mt-1">Automated playbooks loaded</p>
                     </div>
                 </div>
 
-                <div class="p-4 bg-[#0b0e17] border-t border-[#1a2234]">
-                    <form id="chatForm" onsubmit="sendMessage(event)" class="flex space-x-3 max-w-5xl mx-auto">
-                        <input type="text" id="userInput" placeholder="Ask Ragnarök AI to orchestrate tools (e.g. 'Run Mjolnir triage', 'Scan ports')..." class="flex-1 bg-[#07090e] border border-[#1a2234] rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-cyan-500 text-slate-200 font-mono">
-                        <button type="submit" class="px-6 py-3 bg-cyan-600 hover:bg-cyan-500 font-semibold text-sm rounded-lg transition text-white shadow-lg shadow-cyan-950">Execute</button>
+                <!-- LIVE TELEMETRY CHART -->
+                <div class="apple-glass p-8 rounded-3xl shadow-2xl space-y-4">
+                    <div class="flex justify-between items-center">
+                        <div>
+                            <h2 class="text-lg font-bold text-white">Live Telemetry & Threat Ingestion</h2>
+                            <p class="text-xs text-slate-400">Real-time event throughput across Asgard security modules.</p>
+                        </div>
+                        <span class="text-xs font-mono px-3 py-1 bg-white/5 rounded-full text-emerald-400">● Live Stream</span>
+                    </div>
+                    <div class="h-36 w-full flex items-end space-x-1.5 pt-4 border-b border-[#2c2c2e]" id="telemetryChart">
+                        <!-- Bars generated by JS -->
+                    </div>
+                </div>
+
+                <div class="apple-glass p-8 rounded-3xl shadow-2xl">
+                    <h2 class="text-xl font-bold text-white mb-2">Security Operations Center Command Center</h2>
+                    <p class="text-slate-400 text-sm mb-6">Select a module from the left sidebar or use keyboard shortcuts (<kbd class="px-2 py-1 bg-[#2c2c2e] rounded text-blue-400 font-mono">Ctrl+1..8</kbd>) to navigate instantly.</p>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <div onclick="switchTab('heimdall')" class="apple-glass apple-glass-hover p-6 rounded-3xl cursor-pointer transition">
+                            <span class="text-[10px] font-mono text-pink-400 font-semibold">MODULE I</span>
+                            <h4 class="text-base font-bold mt-1 text-white">Heimdall HIDS →</h4>
+                            <p class="text-xs text-slate-400 mt-2">Simulate attacks and test firewall block response.</p>
+                        </div>
+                        <div onclick="switchTab('mjolnir')" class="apple-glass apple-glass-hover p-6 rounded-3xl cursor-pointer transition">
+                            <span class="text-[10px] font-mono text-amber-400 font-semibold">MODULE II</span>
+                            <h4 class="text-base font-bold mt-1 text-white">Mjolnir Triage →</h4>
+                            <p class="text-xs text-slate-400 mt-2">Extract live host processes and check IOCs.</p>
+                        </div>
+                        <div onclick="switchTab('sleipnir')" class="apple-glass apple-glass-hover p-6 rounded-3xl cursor-pointer transition">
+                            <span class="text-[10px] font-mono text-purple-400 font-semibold">MODULE VI</span>
+                            <h4 class="text-base font-bold mt-1 text-white">Sleipnir SOAR →</h4>
+                            <p class="text-xs text-slate-400 mt-2">Execute cross-module automated playbooks.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!---------------- 2. WORKSPACE PANELS ---------------->
+            <!-- HEIMDALL -->
+            <div id="panel-heimdall" class="space-y-6 max-w-6xl mx-auto hidden">
+                <div class="apple-glass p-8 rounded-3xl shadow-2xl">
+                    <div class="flex justify-between items-center mb-6">
+                        <div>
+                            <span class="text-[10px] font-mono text-pink-400 uppercase tracking-widest font-semibold">Module I • HIDS</span>
+                            <h2 class="text-2xl font-bold text-white mt-1">Heimdall Security Console</h2>
+                        </div>
+                        <div class="flex items-center space-x-3">
+                            <span id="badge-heimdall" class="text-xs font-mono px-3 py-1 bg-[#1c1c1e] text-slate-300 rounded-full">Status: Ready</span>
+                            <button onclick="runModule('heimdall', 'simulate')" class="px-5 py-2.5 bg-pink-600 hover:bg-pink-500 font-semibold text-xs rounded-full transition text-white shadow-lg">▶ Run Heimdall Demo</button>
+                        </div>
+                    </div>
+                    <p class="text-slate-400 text-sm mb-6">Parses SSH and Windows security logs in real-time, evaluates sliding-window threshold rules, and triggers automated firewall defense.</p>
+                    <div class="relative">
+                        <button onclick="copyOutput('out-heimdall')" class="absolute top-3 right-3 px-3 py-1.5 bg-[#2c2c2e] hover:bg-[#3a3a3c] text-[10px] font-mono text-slate-300 rounded-full transition">📋 Copy Output</button>
+                        <div id="out-heimdall" class="bg-black border border-[#1d1d1f] p-5 rounded-2xl font-mono text-xs text-emerald-400 min-h-[300px] max-h-[500px] overflow-y-auto whitespace-pre-wrap terminal-scroll">Click "Run Heimdall Demo" to execute live simulation...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- MJOLNIR -->
+            <div id="panel-mjolnir" class="space-y-6 max-w-6xl mx-auto hidden">
+                <div class="apple-glass p-8 rounded-3xl shadow-2xl">
+                    <div class="flex justify-between items-center mb-6">
+                        <div>
+                            <span class="text-[10px] font-mono text-amber-400 uppercase tracking-widest font-semibold">Module II • Incident Response</span>
+                            <h2 class="text-2xl font-bold text-white mt-1">Mjolnir Triage Console</h2>
+                        </div>
+                        <div class="flex items-center space-x-3">
+                            <span id="badge-mjolnir" class="text-xs font-mono px-3 py-1 bg-[#1c1c1e] text-slate-300 rounded-full">Status: Ready</span>
+                            <button onclick="runModule('mjolnir', 'triage')" class="px-5 py-2.5 bg-amber-600 hover:bg-amber-500 font-semibold text-xs rounded-full transition text-white shadow-lg">▶ Execute Live Triage</button>
+                        </div>
+                    </div>
+                    <p class="text-slate-400 text-sm mb-6">Extracts live process telemetry, active network sockets, scans IOC databases, checks VirusTotal, and generates executive Markdown IR reports.</p>
+                    <div class="relative">
+                        <button onclick="copyOutput('out-mjolnir')" class="absolute top-3 right-3 px-3 py-1.5 bg-[#2c2c2e] hover:bg-[#3a3a3c] text-[10px] font-mono text-slate-300 rounded-full transition">📋 Copy Output</button>
+                        <div id="out-mjolnir" class="bg-black border border-[#1d1d1f] p-5 rounded-2xl font-mono text-xs text-emerald-400 min-h-[300px] max-h-[500px] overflow-y-auto whitespace-pre-wrap terminal-scroll">Click "Execute Live Triage" to collect telemetry and scan IOCs...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- BIFROST -->
+            <div id="panel-bifrost" class="space-y-6 max-w-6xl mx-auto hidden">
+                <div class="apple-glass p-8 rounded-3xl shadow-2xl">
+                    <div class="flex justify-between items-center mb-6">
+                        <div>
+                            <span class="text-[10px] font-mono text-cyan-400 uppercase tracking-widest font-semibold">Module III • Network Analysis</span>
+                            <h2 class="text-2xl font-bold text-white mt-1">Bifrost Network Scanner</h2>
+                        </div>
+                        <div class="flex items-center space-x-3">
+                            <span id="badge-bifrost" class="text-xs font-mono px-3 py-1 bg-[#1c1c1e] text-slate-300 rounded-full">Status: Ready</span>
+                            <input type="text" id="targetHost" value="127.0.0.1" class="bg-black border border-[#1d1d1f] rounded-full px-4 py-2 text-xs text-white font-mono">
+                            <button onclick="runModule('bifrost', 'scan')" class="px-5 py-2.5 bg-cyan-600 hover:bg-cyan-500 font-semibold text-xs rounded-full transition text-white shadow-lg">▶ Start Port Scan</button>
+                        </div>
+                    </div>
+                    <p class="text-slate-400 text-sm mb-6">Multi-threaded TCP port scanner with banner grabbing, traffic anomaly detection, GeoIP/Whois intelligence enrichment, and AES-128 report encryption.</p>
+                    <div class="relative">
+                        <button onclick="copyOutput('out-bifrost')" class="absolute top-3 right-3 px-3 py-1.5 bg-[#2c2c2e] hover:bg-[#3a3a3c] text-[10px] font-mono text-slate-300 rounded-lg transition">📋 Copy Output</button>
+                        <div id="out-bifrost" class="bg-black border border-[#1d1d1f] p-5 rounded-2xl font-mono text-xs text-emerald-400 min-h-[300px] max-h-[500px] overflow-y-auto whitespace-pre-wrap terminal-scroll">Click "Start Port Scan" to analyze target host...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- YGGDRASIL -->
+            <div id="panel-yggdrasil" class="space-y-6 max-w-6xl mx-auto hidden">
+                <div class="apple-glass p-8 rounded-3xl shadow-2xl">
+                    <div class="flex justify-between items-center mb-6">
+                        <div>
+                            <span class="text-[10px] font-mono text-blue-400 uppercase tracking-widest font-semibold">Module IV • Active Directory</span>
+                            <h2 class="text-2xl font-bold text-white mt-1">Yggdrasil AD Auditor</h2>
+                        </div>
+                        <div class="flex items-center space-x-3">
+                            <span id="badge-yggdrasil" class="text-xs font-mono px-3 py-1 bg-[#1c1c1e] text-slate-300 rounded-full">Status: Ready</span>
+                            <button onclick="runModule('yggdrasil', 'audit')" class="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 font-semibold text-xs rounded-full transition text-white shadow-lg">▶ Run AD Security Audit</button>
+                        </div>
+                    </div>
+                    <p class="text-slate-400 text-sm mb-6">Evaluates GPO password complexity policies, account lockout thresholds, stale privileged accounts, and domain misconfigurations.</p>
+                    <div class="relative">
+                        <button onclick="copyOutput('out-yggdrasil')" class="absolute top-3 right-3 px-3 py-1.5 bg-[#2c2c2e] hover:bg-[#3a3a3c] text-[10px] font-mono text-slate-300 rounded-lg transition">📋 Copy Output</button>
+                        <div id="out-yggdrasil" class="bg-black border border-[#1d1d1f] p-5 rounded-2xl font-mono text-xs text-emerald-400 min-h-[300px] max-h-[500px] overflow-y-auto whitespace-pre-wrap terminal-scroll">Click "Run AD Security Audit" to evaluate domain posture...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- FENRIR -->
+            <div id="panel-fenrir" class="space-y-6 max-w-6xl mx-auto hidden">
+                <div class="apple-glass p-8 rounded-3xl shadow-2xl">
+                    <div class="flex justify-between items-center mb-6">
+                        <div>
+                            <span class="text-[10px] font-mono text-red-400 uppercase tracking-widest font-semibold">Module V • Threat Intelligence</span>
+                            <h2 class="text-2xl font-bold text-white mt-1">Fenrir CTI Aggregator</h2>
+                        </div>
+                        <div class="flex items-center space-x-3">
+                            <span id="badge-fenrir" class="text-xs font-mono px-3 py-1 bg-[#1c1c1e] text-slate-300 rounded-full">Status: Ready</span>
+                            <button onclick="runModule('fenrir', 'update')" class="px-5 py-2.5 bg-red-600 hover:bg-red-500 font-semibold text-xs rounded-full transition text-white shadow-lg">▶ Update Feeds & CISA KEV</button>
+                        </div>
+                    </div>
+                    <p class="text-slate-400 text-sm mb-6">Aggregates and normalizes threat intelligence indicators of compromise from public feeds into a fast local SQLite database.</p>
+                    <div class="relative">
+                        <button onclick="copyOutput('out-fenrir')" class="absolute top-3 right-3 px-3 py-1.5 bg-[#2c2c2e] hover:bg-[#3a3a3c] text-[10px] font-mono text-slate-300 rounded-lg transition">📋 Copy Output</button>
+                        <div id="out-fenrir" class="bg-black border border-[#1d1d1f] p-5 rounded-2xl font-mono text-xs text-emerald-400 min-h-[300px] max-h-[500px] overflow-y-auto whitespace-pre-wrap terminal-scroll">Click "Update Feeds" to ingest CISA KEV and threat indicators...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SLEIPNIR -->
+            <div id="panel-sleipnir" class="space-y-6 max-w-6xl mx-auto hidden">
+                <div class="apple-glass p-8 rounded-3xl shadow-2xl">
+                    <div class="flex justify-between items-center mb-6">
+                        <div>
+                            <span class="text-[10px] font-mono text-purple-400 uppercase tracking-widest font-semibold">Module VI • SOAR Automation</span>
+                            <h2 class="text-2xl font-bold text-white mt-1">Sleipnir SOAR Playbook Runner</h2>
+                        </div>
+                        <div class="flex items-center space-x-3">
+                            <span id="badge-sleipnir" class="text-xs font-mono px-3 py-1 bg-[#1c1c1e] text-slate-300 rounded-full">Status: Ready</span>
+                            <button onclick="runModule('sleipnir', 'run')" class="px-5 py-2.5 bg-purple-600 hover:bg-purple-500 font-semibold text-xs rounded-full transition text-white shadow-lg">▶ Execute SOAR Pipeline</button>
+                        </div>
+                    </div>
+                    <p class="text-slate-400 text-sm mb-6">Executes YAML playbooks, orchestrating Fenrir, Heimdall, Mjolnir, Bifrost, and Yggdrasil into a single automated incident response pipeline.</p>
+                    <div class="relative">
+                        <button onclick="copyOutput('out-sleipnir')" class="absolute top-3 right-3 px-3 py-1.5 bg-[#2c2c2e] hover:bg-[#3a3a3c] text-[10px] font-mono text-slate-300 rounded-lg transition">📋 Copy Output</button>
+                        <div id="out-sleipnir" class="bg-black border border-[#1d1d1f] p-5 rounded-2xl font-mono text-xs text-emerald-400 min-h-[300px] max-h-[500px] overflow-y-auto whitespace-pre-wrap terminal-scroll">Click "Execute SOAR Pipeline" to run cross-module automation...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- AI ASSISTANT -->
+            <div id="panel-ai" class="flex flex-col h-full max-w-6xl mx-auto hidden">
+                <div class="apple-glass p-8 rounded-3xl flex-1 flex flex-col h-[75vh] shadow-2xl">
+                    <h2 class="text-xl font-bold text-white mb-2">Ragnarök AI Assistant</h2>
+                    <p class="text-slate-400 text-xs mb-4">Chat with the AI orchestrator to investigate threats, analyze tool output, or trigger defensive actions.</p>
+                    
+                    <div id="chatBox" class="flex-1 p-5 overflow-y-auto terminal-scroll space-y-4 bg-black border border-[#1d1d1f] rounded-2xl mb-4">
+                        <div class="flex items-start space-x-3">
+                            <div class="w-8 h-8 rounded-xl bg-blue-950 border border-blue-700 flex items-center justify-center text-blue-400 font-bold text-xs shrink-0 font-mono">AI</div>
+                            <div class="apple-glass p-4 rounded-xl text-xs leading-relaxed max-w-2xl font-mono">Ready. Ask me to run any module or analyze security telemetry. Ask about Ollama or OpenRouter configuration.</div>
+                        </div>
+                    </div>
+
+                    <form onsubmit="sendChat(event)" class="flex space-x-3">
+                        <input type="text" id="chatInput" placeholder="Ask AI assistant (e.g., 'Run Mjolnir triage' or 'Scan network')..." class="flex-1 bg-black border border-[#1d1d1f] rounded-full px-5 py-3 text-xs text-white font-mono focus:outline-none focus:border-blue-500">
+                        <button type="submit" class="px-6 py-3 bg-blue-600 hover:bg-blue-500 font-semibold text-xs rounded-full transition text-white">Send Query</button>
                     </form>
                 </div>
             </div>
 
-            <!-- TAB 2: ARSENAL & TOOLS -->
-            <div id="panel-arsenal" class="flex-1 p-8 overflow-y-auto hidden">
-                <h2 class="text-2xl font-black uppercase tracking-wider mb-2">Asgard Arsenal Overview</h2>
-                <p class="text-slate-400 text-sm mb-8">Integrated security modules ready for deployment and orchestration.</p>
-                
-                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    <div class="bg-[#0f1422] border border-[#1a2234] p-6 rounded-xl">
-                        <span class="text-xs font-mono text-pink-400 uppercase">Module I</span>
-                        <h3 class="text-xl font-bold mt-1 mb-2">Heimdall HIDS</h3>
-                        <p class="text-xs text-slate-400 mb-4">Real-time log parsing, sliding-window YAML detection, and automated firewall block response.</p>
-                        <button onclick="quickAction('Simulate Heimdall alert')" class="w-full py-2 bg-[#161c2d] hover:bg-[#1e2740] border border-[#26334f] text-xs font-semibold rounded text-slate-200 transition">Test Heimdall</button>
-                    </div>
-                    <div class="bg-[#0f1422] border border-[#1a2234] p-6 rounded-xl">
-                        <span class="text-xs font-mono text-amber-400 uppercase">Module II</span>
-                        <h3 class="text-xl font-bold mt-1 mb-2">Mjolnir Triage</h3>
-                        <p class="text-xs text-slate-400 mb-4">Instant system telemetry extraction, process scanning, and VirusTotal hash verification.</p>
-                        <button onclick="quickAction('Run Mjolnir triage')" class="w-full py-2 bg-[#161c2d] hover:bg-[#1e2740] border border-[#26334f] text-xs font-semibold rounded text-slate-200 transition">Run Triage</button>
-                    </div>
-                    <div class="bg-[#0f1422] border border-[#1a2234] p-6 rounded-xl">
-                        <span class="text-xs font-mono text-cyan-400 uppercase">Module III</span>
-                        <h3 class="text-xl font-bold mt-1 mb-2">Bifrost Scanner</h3>
-                        <p class="text-xs text-slate-400 mb-4">Multi-threaded TCP port scanner, banner grabbing, GeoIP lookup, and AES-128 report encryption.</p>
-                        <button onclick="quickAction('Scan ports with Bifrost')" class="w-full py-2 bg-[#161c2d] hover:bg-[#1e2740] border border-[#26334f] text-xs font-semibold rounded text-slate-200 transition">Scan Ports</button>
-                    </div>
-                    <div class="bg-[#0f1422] border border-[#1a2234] p-6 rounded-xl">
-                        <span class="text-xs font-mono text-blue-400 uppercase">Module IV</span>
-                        <h3 class="text-xl font-bold mt-1 mb-2">Yggdrasil AD</h3>
-                        <p class="text-xs text-slate-400 mb-4">Active Directory security posture auditor, GPO password policies, and privileged account checks.</p>
-                        <button onclick="quickAction('Audit Active Directory')" class="w-full py-2 bg-[#161c2d] hover:bg-[#1e2740] border border-[#26334f] text-xs font-semibold rounded text-slate-200 transition">Run AD Audit</button>
-                    </div>
-                    <div class="bg-[#0f1422] border border-[#1a2234] p-6 rounded-xl">
-                        <span class="text-xs font-mono text-red-400 uppercase">Module V</span>
-                        <h3 class="text-xl font-bold mt-1 mb-2">Fenrir CTI</h3>
-                        <p class="text-xs text-slate-400 mb-4">Threat intelligence aggregator collecting CISA KEV and public threat feeds into SQLite.</p>
-                        <button onclick="quickAction('Update threat intel with Fenrir')" class="w-full py-2 bg-[#161c2d] hover:bg-[#1e2740] border border-[#26334f] text-xs font-semibold rounded text-slate-200 transition">Update Feeds</button>
-                    </div>
-                    <div class="bg-[#0f1422] border border-[#1a2234] p-6 rounded-xl">
-                        <span class="text-xs font-mono text-purple-400 uppercase">Module VI</span>
-                        <h3 class="text-xl font-bold mt-1 mb-2">Sleipnir SOAR</h3>
-                        <p class="text-xs text-slate-400 mb-4">YAML Playbook automation engine orchestrating cross-module incident response workflows.</p>
-                        <button onclick="quickAction('Run Sleipnir SOAR playbook')" class="w-full py-2 bg-[#161c2d] hover:bg-[#1e2740] border border-[#26334f] text-xs font-semibold rounded text-slate-200 transition">Run Playbook</button>
-                    </div>
+        </div>
+
+    </main>
+
+    <!-- TOAST NOTIFICATION CONTAINER -->
+    <div id="toastContainer" class="fixed bottom-6 right-6 z-50 space-y-3"></div>
+
+    <!-- SETTINGS MODAL -->
+    <div id="settingsModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm hidden items-center justify-center z-50 p-4">
+        <div class="apple-glass p-8 rounded-3xl max-w-md w-full shadow-2xl border border-white/10 space-y-4">
+            <h3 class="text-lg font-bold text-white">Universal LLM & Settings</h3>
+            <p class="text-xs text-slate-400 mb-2">Configure your AI backend. Supports OpenRouter, Ollama (Local/Offline), OpenAI, and Claude.</p>
+            
+            <div>
+                <label class="block text-xs font-mono text-slate-300 uppercase mb-2">Provider</label>
+                <select id="providerSelect" class="w-full bg-black border border-[#1d1d1f] rounded-full px-5 py-3 text-xs text-slate-200 font-mono focus:outline-none focus:border-blue-500">
+                    <option value="openrouter">OpenRouter (Claude, GPT, Llama, Mistral)</option>
+                    <option value="ollama">Ollama (Local / On-Premise / Offline)</option>
+                    <option value="openai">OpenAI Direct</option>
+                </select>
+            </div>
+
+            <div>
+                <label class="block text-xs font-mono text-slate-300 uppercase mb-2">API Key (Leave blank for Ollama)</label>
+                <input type="password" id="apiKeyInput" placeholder="sk-or-v1-... or sk-..." class="w-full bg-black border border-[#1d1d1f] rounded-full px-5 py-3 text-xs text-slate-200 font-mono focus:outline-none focus:border-blue-500">
+            </div>
+
+            <div>
+                <label class="block text-xs font-mono text-slate-300 uppercase mb-2">Model Name</label>
+                <input type="text" id="modelInput" placeholder="openai/gpt-4o-mini or llama3" class="w-full bg-black border border-[#1d1d1f] rounded-full px-5 py-3 text-xs text-slate-200 font-mono focus:outline-none focus:border-blue-500">
+            </div>
+
+            <div>
+                <label class="block text-xs font-mono text-slate-300 uppercase mb-2">Accent Color</label>
+                <div class="flex space-x-3">
+                    <button onclick="setAccent('#0071e3', 'rgba(0, 113, 227, 0.2)')" class="w-8 h-8 rounded-full bg-[#0071e3] border-2 border-white/20"></button>
+                    <button onclick="setAccent('#34c759', 'rgba(52, 199, 89, 0.2)')" class="w-8 h-8 rounded-full bg-[#34c759] border-2 border-white/20"></button>
+                    <button onclick="setAccent('#af52de', 'rgba(175, 82, 222, 0.2)')" class="w-8 h-8 rounded-full bg-[#af52de] border-2 border-white/20"></button>
+                    <button onclick="setAccent('#ff9500', 'rgba(255, 149, 0, 0.2)')" class="w-8 h-8 rounded-full bg-[#ff9500] border-2 border-white/20"></button>
                 </div>
             </div>
 
-            <!-- TAB 3: LIVE TERMINAL -->
-            <div id="panel-terminal" class="flex-1 p-6 overflow-y-auto hidden font-mono text-xs text-emerald-400 bg-black flex flex-col">
-                <div class="mb-4 text-slate-500">ASGARD KERNEL v2.6 [Secure TTY Stream]</div>
-                <div id="terminalOutput" class="flex-1 space-y-1">
-                    <div>> System initialized successfully.</div>
-                    <div>> Connected to local FastAPI orchestrator on port 8080.</div>
-                    <div>> All 6 Asgard modules loaded into memory.</div>
-                </div>
+            <div class="flex space-x-3 pt-4">
+                <button onclick="saveSettings()" class="flex-1 py-3 bg-blue-600 hover:bg-blue-500 font-semibold text-xs rounded-full text-white">Save Changes</button>
+                <button onclick="closeSettings()" class="px-5 py-3 bg-[#2c2c2e] text-slate-300 font-semibold text-xs rounded-full">Cancel</button>
             </div>
-
-        </main>
-
+        </div>
     </div>
 
     <script>
-        const API_URL = "http://127.0.0.1:8080/api/v1/orchestrate";
+        const API_EXECUTE = "http://127.0.0.1:8080/api/v1/execute";
+        const API_CHAT = "http://127.0.0.1:8080/api/v1/chat";
 
-        function switchTab(tab) {
-            document.getElementById('panel-chat').classList.add('hidden');
-            document.getElementById('panel-arsenal').classList.add('hidden');
-            document.getElementById('panel-terminal').classList.add('hidden');
+        const tabMap = ['overview', 'heimdall', 'mjolnir', 'bifrost', 'yggdrasil', 'fenrir', 'sleipnir', 'ai'];
 
-            document.getElementById('tab-chat').className = "px-4 py-1.5 text-xs font-semibold uppercase tracking-wider rounded-md transition text-slate-400 hover:text-white";
-            document.getElementById('tab-arsenal').className = "px-4 py-1.5 text-xs font-semibold uppercase tracking-wider rounded-md transition text-slate-400 hover:text-white";
-            document.getElementById('tab-terminal').className = "px-4 py-1.5 text-xs font-semibold uppercase tracking-wider rounded-md transition text-slate-400 hover:text-white";
+        window.addEventListener('DOMContentLoaded', () => {
+            const savedAccent = localStorage.getItem('asgard_accent');
+            const savedGlow = localStorage.getItem('asgard_glow');
+            if (savedAccent) setAccent(savedAccent, savedGlow || 'rgba(0, 113, 227, 0.2)');
+            initTelemetryChart();
+            updateLlmIndicator();
+        });
 
-            document.getElementById('panel-' + tab).classList.remove('hidden');
-            document.getElementById('tab-' + tab).className = "px-4 py-1.5 text-xs font-semibold uppercase tracking-wider rounded-md transition bg-cyan-600 text-white shadow";
+        function setAccent(color, glow) {
+            document.documentElement.style.setProperty('--accent', color);
+            document.documentElement.style.setProperty('--accent-glow', glow);
+            localStorage.setItem('asgard_accent', color);
+            localStorage.setItem('asgard_glow', glow);
         }
 
-        async function sendMessage(e) {
-            e.preventDefault();
-            const input = document.getElementById("userInput");
-            const prompt = input.value.trim();
-            if (!prompt) return;
+        function updateLlmIndicator() {
+            const provider = localStorage.getItem('asgard_provider') || 'openrouter';
+            const ind = document.getElementById('llmIndicator');
+            ind.textContent = `AI Provider: ${provider.toUpperCase()}`;
+        }
 
-            appendMessage("User", prompt, true);
-            input.value = "";
+        function initTelemetryChart() {
+            const chart = document.getElementById('telemetryChart');
+            if (!chart) return;
+            chart.innerHTML = '';
+            for (let i = 0; i < 45; i++) {
+                const bar = document.createElement('div');
+                const height = Math.floor(Math.random() * 80) + 20;
+                bar.className = "flex-1 bg-blue-500/30 hover:bg-blue-400 transition-all rounded-t";
+                bar.style.height = height + '%';
+                chart.appendChild(bar);
+            }
+            setInterval(() => {
+                const bars = chart.children;
+                if (bars.length > 0) {
+                    const idx = Math.floor(Math.random() * bars.length);
+                    bars[idx].style.height = (Math.floor(Math.random() * 80) + 20) + '%';
+                }
+            }, 800);
+        }
+
+        window.addEventListener('keydown', (e) => {
+            if (e.ctrlKey && e.key >= '1' && e.key <= '8') {
+                e.preventDefault();
+                const index = parseInt(e.key) - 1;
+                if (tabMap[index]) switchTab(tabMap[index]);
+            }
+            if (e.ctrlKey && e.key.toLowerCase() === 'k') {
+                e.preventDefault();
+                switchTab('ai');
+                document.getElementById('chatInput').focus();
+            }
+        });
+
+        function switchTab(tab) {
+            tabMap.forEach((p, idx) => {
+                document.getElementById('panel-' + p).classList.add('hidden');
+                const navBtn = document.getElementById('nav-' + p);
+                if (navBtn) {
+                    navBtn.className = "w-full flex items-center justify-between px-3.5 py-2.5 rounded-full transition text-slate-400 hover:text-white hover:bg-white/5";
+                }
+            });
+
+            document.getElementById('panel-' + tab).classList.remove('hidden');
+            const activeNav = document.getElementById('nav-' + tab);
+            if (activeNav) {
+                activeNav.className = "w-full flex items-center justify-between px-3.5 py-2.5 rounded-full transition bg-white/10 text-white font-semibold";
+            }
+            document.getElementById('pageTitle').textContent = tab === 'overview' ? 'Overview Dashboard' : (tab.toUpperCase() + ' WORKSPACE');
+        }
+
+        async function runModule(moduleName, actionName) {
+            switchTab(moduleName);
+            const outEl = document.getElementById('out-' + moduleName);
+            const badgeEl = document.getElementById('badge-' + moduleName);
+
+            outEl.textContent = `[+] Executing ${moduleName.toUpperCase()}... Please wait...`;
+            badgeEl.className = "text-xs font-mono px-3 py-1 bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded-full animate-pulse";
+            badgeEl.textContent = "Status: Executing...";
+
+            const target = moduleName === 'bifrost' ? document.getElementById('targetHost').value : '127.0.0.1';
+            const apiKey = localStorage.getItem('asgard_openai_key') || '';
+            const provider = localStorage.getItem('asgard_provider') || 'openrouter';
+            const model = localStorage.getItem('asgard_model') || 'openai/gpt-4o-mini';
 
             try {
-                const res = await fetch(API_URL, {
+                const res = await fetch(API_EXECUTE, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ prompt })
+                    body: JSON.stringify({ module: moduleName, action: actionName, target, api_key: apiKey, provider, model })
                 });
                 const data = await res.json();
-                appendMessage("Ragnarök AI", data.output, false);
-                logTerminal(`> Executed intent: ${data.intent} [${data.status}]`);
+                outEl.textContent = data.output || "Execution completed with no output.";
+                badgeEl.className = "text-xs font-mono px-3 py-1 bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-full";
+                badgeEl.textContent = "Status: Success";
+                showToast(`Module ${moduleName.toUpperCase()} executed successfully!`, 'success');
             } catch (err) {
-                appendMessage("Ragnarök AI", "Failed to connect to backend server on port 8080. Make sure Avvia_Asgard_SOC.bat is running.", false);
-                logTerminal(`> [ERROR] Connection failed to backend.`);
+                outEl.textContent = `[ERROR] Failed to communicate with backend server on port 8080.\nDetails: ${err}`;
+                badgeEl.className = "text-xs font-mono px-3 py-1 bg-red-500/20 text-red-400 border border-red-500/30 rounded-full";
+                badgeEl.textContent = "Status: Failed";
+                showToast(`Module ${moduleName.toUpperCase()} execution failed.`, 'error');
             }
         }
 
-        function quickAction(text) {
-            switchTab('chat');
-            document.getElementById("userInput").value = text;
+        async function sendChat(e) {
+            e.preventDefault();
+            const input = document.getElementById('chatInput');
+            const prompt = input.value.trim();
+            if (!prompt) return;
+            input.value = "";
+
+            appendChatMsg("User", prompt, true);
+            const apiKey = localStorage.getItem('asgard_openai_key') || '';
+            const provider = localStorage.getItem('asgard_provider') || 'openrouter';
+            const model = localStorage.getItem('asgard_model') || 'openai/gpt-4o-mini';
+
+            try {
+                const res = await fetch(API_CHAT, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ prompt, api_key: apiKey, provider, model })
+                });
+                const data = await res.json();
+                appendChatMsg("Ragnarök AI", data.output, false);
+            } catch (err) {
+                appendChatMsg("Ragnarök AI", "Error connecting to backend server.", false);
+            }
         }
 
-        function appendMessage(sender, text, isUser) {
-            const chatBox = document.getElementById("chatBox");
-            const div = document.createElement("div");
+        function appendChatMsg(sender, text, isUser) {
+            const chatBox = document.getElementById('chatBox');
+            const div = document.createElement('div');
             div.className = "flex items-start space-x-3" + (isUser ? " justify-end" : "");
-
-            const initial = isUser ? "U" : "AI";
-            const bgClass = isUser ? "bg-purple-950 border-purple-700 text-purple-300" : "bg-cyan-950 border-cyan-700 text-cyan-400";
-            const contentBg = isUser ? "bg-[#161321] border-[#2d1f45]" : "bg-[#0f1422] border-[#1a2234]";
-
             div.innerHTML = `
-                ${isUser ? '' : `<div class="w-8 h-8 rounded ${bgClass} border flex items-center justify-center font-bold text-xs shrink-0 font-mono">${initial}</div>`}
-                <div class="${contentBg} border p-4 rounded-xl max-w-3xl text-sm leading-relaxed shadow-md">
-                    <div class="text-xs font-semibold mb-1 text-slate-400 font-mono">${sender}</div>
-                    <pre class="whitespace-pre-wrap font-mono text-xs text-slate-300 leading-normal">${escapeHtml(text)}</pre>
-                </div>
-                ${isUser ? `<div class="w-8 h-8 rounded ${bgClass} border flex items-center justify-center font-bold text-xs shrink-0 font-mono">U</div>` : ''}
+                ${isUser ? '' : '<div class="w-8 h-8 rounded-xl bg-blue-950 border border-blue-700 flex items-center justify-center text-blue-400 font-bold text-xs shrink-0 font-mono">AI</div>'}
+                <div class="apple-glass p-4 rounded-2xl text-xs max-w-2xl whitespace-pre-wrap font-mono text-slate-300 leading-normal">${escapeHtml(text)}</div>
+                ${isUser ? '<div class="w-8 h-8 rounded-xl bg-purple-950 border border-purple-700 flex items-center justify-center text-purple-300 font-bold text-xs shrink-0 font-mono">U</div>' : ''}
             `;
             chatBox.appendChild(div);
             chatBox.scrollTop = chatBox.scrollHeight;
         }
 
-        function logTerminal(text) {
-            const term = document.getElementById("terminalOutput");
-            const div = document.createElement("div");
-            div.textContent = text;
-            term.appendChild(div);
-            term.scrollTop = term.scrollHeight;
+        function showToast(message, type = 'success') {
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            toast.className = `apple-glass px-5 py-4 rounded-2xl shadow-2xl text-xs font-mono flex items-center space-x-3 border transition-opacity duration-300 ${type === 'success' ? 'border-emerald-500/40 bg-emerald-950/40 text-emerald-300' : 'border-red-500/40 bg-red-950/40 text-red-300'}`;
+            toast.innerHTML = `<span>${type === 'success' ? '✅' : '❌'}</span> <span>${message}</span>`;
+            container.appendChild(toast);
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                setTimeout(() => toast.remove(), 300);
+            }, 4000);
+        }
+
+        function copyOutput(elementId) {
+            const text = document.getElementById(elementId).textContent;
+            navigator.clipboard.writeText(text).then(() => {
+                showToast('Output copied to clipboard!', 'success');
+            });
+        }
+
+        function openSettings() {
+            document.getElementById('apiKeyInput').value = localStorage.getItem('asgard_openai_key') || '';
+            document.getElementById('providerSelect').value = localStorage.getItem('asgard_provider') || 'openrouter';
+            document.getElementById('modelInput').value = localStorage.getItem('asgard_model') || 'openai/gpt-4o-mini';
+            document.getElementById('settingsModal').classList.remove('hidden');
+            document.getElementById('settingsModal').classList.add('flex');
+        }
+
+        function closeSettings() {
+            document.getElementById('settingsModal').classList.remove('flex');
+            document.getElementById('settingsModal').classList.add('hidden');
+        }
+
+        function saveSettings() {
+            const key = document.getElementById('apiKeyInput').value.trim();
+            const provider = document.getElementById('providerSelect').value;
+            const model = document.getElementById('modelInput').value.trim();
+
+            localStorage.setItem('asgard_openai_key', key);
+            localStorage.setItem('asgard_provider', provider);
+            localStorage.setItem('asgard_model', model || 'openai/gpt-4o-mini');
+            
+            updateLlmIndicator();
+            closeSettings();
+            showToast('LLM Settings saved successfully!', 'success');
         }
 
         function escapeHtml(string) {
