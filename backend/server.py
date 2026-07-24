@@ -166,6 +166,44 @@ def read_report(path: str):
         content = f.read()
     return {"filename": os.path.basename(path), "content": content}
 
+@app.get("/api/v1/hunt")
+def threat_hunt(q: Optional[str] = ""):
+    db_path = os.path.join(ASGARD_ROOT, "Fenrir", "fenrir.db")
+    if not os.path.exists(db_path):
+        return {"results": [], "total": 0, "message": "Fenrir database not found. Run Fenrir update first."}
+    
+    import sqlite3
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        if q:
+            cursor.execute("""
+                SELECT indicator_type, indicator, name, source, severity, date_added
+                FROM iocs WHERE indicator LIKE ? OR name LIKE ? OR indicator_type LIKE ?
+                ORDER BY id DESC LIMIT 100
+            """, (f"%{q}%", f"%{q}%", f"%{q}%"))
+        else:
+            cursor.execute("""
+                SELECT indicator_type, indicator, name, source, severity, date_added
+                FROM iocs ORDER BY id DESC LIMIT 100
+            """)
+        rows = cursor.fetchall()
+        conn.close()
+
+        results = []
+        for r in rows:
+            results.append({
+                "indicator_type": r[0],
+                "indicator": r[1],
+                "name": r[2],
+                "source": r[3],
+                "severity": r[4],
+                "date_added": r[5]
+            })
+        return {"results": results, "total": len(results)}
+    except Exception as e:
+        return {"results": [], "total": 0, "error": str(e)}
+
 @app.websocket("/ws/telemetry")
 async def websocket_telemetry(ws: WebSocket):
     await telemetry.connect(ws)

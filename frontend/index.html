@@ -63,6 +63,9 @@
             <button onclick="switchTab('fenrir')" id="nav-fenrir" class="w-full flex items-center justify-between px-3.5 py-2.5 rounded-full transition text-slate-400 hover:text-white hover:bg-white/5">
                 <span class="flex items-center space-x-3"><span class="health-dot health-unknown" id="health-fenrir"></span> <span>Fenrir CTI</span></span>
             </button>
+            <button onclick="switchTab('hunt')" id="nav-hunt" class="w-full flex items-center justify-between px-3.5 py-2.5 rounded-full transition text-slate-400 hover:text-white hover:bg-white/5">
+                <span class="flex items-center space-x-3"><span>🎯</span> <span>Threat Hunting</span></span>
+            </button>
             <button onclick="switchTab('sleipnir')" id="nav-sleipnir" class="w-full flex items-center justify-between px-3.5 py-2.5 rounded-full transition text-slate-400 hover:text-white hover:bg-white/5">
                 <span class="flex items-center space-x-3"><span class="health-dot health-unknown" id="health-sleipnir"></span> <span>Sleipnir SOAR</span></span>
             </button>
@@ -314,6 +317,39 @@
                 </div>
             </div>
 
+            <!-- THREAT HUNTING -->
+            <div id="panel-hunt" class="space-y-6 max-w-6xl mx-auto hidden">
+                <div class="apple-glass p-8 rounded-3xl shadow-2xl">
+                    <div class="flex justify-between items-center mb-6">
+                        <div>
+                            <span class="text-[10px] font-mono text-red-400 uppercase tracking-widest font-semibold">Module V.1 • Threat Intelligence Hunt</span>
+                            <h2 class="text-2xl font-bold text-white mt-1">IOC Threat Hunting Engine</h2>
+                        </div>
+                        <div class="flex items-center space-x-3">
+                            <input type="text" id="huntQuery" placeholder="Search IP, domain, CVE, hash..." class="bg-black border border-[#1d1d1f] rounded-full px-4 py-2 text-xs text-white font-mono w-64">
+                            <button onclick="runThreatHunt()" class="px-5 py-2.5 bg-red-600 hover:bg-red-500 font-semibold text-xs rounded-full transition text-white shadow-lg">🔍 Search IOCs</button>
+                        </div>
+                    </div>
+                    <p class="text-slate-400 text-sm mb-6">Query the local Fenrir CTI database containing thousands of aggregated CISA KEV and threat indicators.</p>
+                    <div class="bg-black border border-[#1d1d1f] rounded-2xl p-5 overflow-x-auto min-h-[350px] max-h-[500px] terminal-scroll">
+                        <table class="w-full text-xs text-left font-mono">
+                            <thead class="text-slate-400 border-b border-[#2c2c2e]">
+                                <tr>
+                                    <th class="pb-3 pr-4">Type</th>
+                                    <th class="pb-3 pr-4">Indicator</th>
+                                    <th class="pb-3 pr-4">Severity</th>
+                                    <th class="pb-3 pr-4">Source</th>
+                                    <th class="pb-3">Vulnerability / Campaign Name</th>
+                                </tr>
+                            </thead>
+                            <tbody id="huntTable" class="divide-y divide-[#1d1d1f]">
+                                <tr><td colspan="5" class="py-6 text-slate-500 text-center">Enter a query or click Search IOCs to load threat intelligence records.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
             <!-- SLEIPNIR -->
             <div id="panel-sleipnir" class="space-y-6 max-w-6xl mx-auto hidden">
                 <div class="apple-glass p-8 rounded-3xl shadow-2xl">
@@ -433,7 +469,7 @@
         const API_OLLAMA = API_BASE + "/api/v1/ollama/status";
         const WS_URL = "ws://127.0.0.1:8080/ws/telemetry";
 
-        const tabMap = ['overview', 'heimdall', 'mjolnir', 'bifrost', 'inventory', 'yggdrasil', 'fenrir', 'sleipnir', 'reports', 'ai'];
+        const tabMap = ['overview', 'heimdall', 'mjolnir', 'bifrost', 'inventory', 'yggdrasil', 'fenrir', 'hunt', 'sleipnir', 'reports', 'ai'];
         let chatHistory = [];
         let telemetryData = new Array(45).fill(0).map(() => Math.floor(Math.random() * 40) + 10);
         let totalExecs = 0;
@@ -668,7 +704,38 @@
             }
         }
 
-        async function runInventory() {
+        async function runThreatHunt() {
+            const query = document.getElementById('huntQuery').value.trim();
+            const tbody = document.getElementById('huntTable');
+            tbody.innerHTML = '<tr><td colspan="5" class="py-6 text-slate-400 text-center animate-pulse">Searching Fenrir intelligence database...</td></tr>';
+            try {
+                const res = await fetch(`${API_BASE}/api/v1/hunt?q=${encodeURIComponent(query)}`);
+                const data = await res.json();
+                const results = data.results || [];
+                if (results.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="5" class="py-6 text-slate-500 text-center">No IOC records found matching query.</td></tr>';
+                } else {
+                    tbody.innerHTML = '';
+                    results.forEach(r => {
+                        const tr = document.createElement('tr');
+                        tr.className = 'hover:bg-white/[0.02]';
+                        const sevColor = r.severity === 'CRITICAL' ? 'text-red-400 font-bold' : (r.severity === 'HIGH' ? 'text-amber-400' : 'text-slate-300');
+                        tr.innerHTML = `
+                            <td class="py-3 pr-4 text-slate-400">${r.indicator_type}</td>
+                            <td class="py-3 pr-4 text-white font-bold font-mono">${r.indicator}</td>
+                            <td class="py-3 pr-4 ${sevColor}">${r.severity}</td>
+                            <td class="py-3 pr-4 text-slate-400">${r.source}</td>
+                            <td class="py-3 text-slate-300">${r.name || '-'}</td>
+                        `;
+                        tbody.appendChild(tr);
+                    });
+                    showToast(`Found ${results.length} IOC matches`, 'success');
+                }
+            } catch (err) {
+                tbody.innerHTML = `<tr><td colspan="5" class="py-6 text-red-400 text-center">Error communicating with backend: ${err}</td></tr>`;
+                showToast('Threat hunt failed', 'error');
+            }
+        }
             const target = document.getElementById('inventory-target').value.trim();
             if (!target) { showToast('Enter a subnet CIDR (e.g. 192.168.1.0/24)', 'error'); return; }
             const btn = document.getElementById('inventory-btn');
