@@ -17,6 +17,11 @@
         .terminal-scroll::-webkit-scrollbar-thumb { background: #3a3a3c; border-radius: 3px; }
         @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
         .animate-slide { animation: slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+        .health-dot { width: 7px; height: 7px; border-radius: 50%; transition: background-color 0.5s; }
+        .health-ok { background-color: #22c55e; box-shadow: 0 0 6px rgba(34, 197, 94, 0.5); }
+        .health-fail { background-color: #ef4444; box-shadow: 0 0 6px rgba(239, 68, 68, 0.5); }
+        .health-unknown { background-color: #6b7280; }
+        .report-item:hover { background: rgba(255,255,255,0.04); }
     </style>
 </head>
 <body class="h-screen flex overflow-hidden selection:bg-blue-500 selection:text-white">
@@ -33,29 +38,32 @@
 
         <div class="px-5 py-3 text-[10px] font-mono text-slate-600 uppercase tracking-widest flex justify-between items-center">
             <span>Workspaces</span>
-            <span class="text-[9px] bg-[#1c1c1e] px-1.5 py-0.5 rounded text-slate-400">Ctrl+1..8</span>
+            <span class="text-[9px] bg-[#1c1c1e] px-1.5 py-0.5 rounded text-slate-400">Ctrl+1..9</span>
         </div>
         <nav class="flex-1 px-3 space-y-1 overflow-y-auto text-xs font-medium">
             <button onclick="switchTab('overview')" id="nav-overview" class="w-full flex items-center justify-between px-3.5 py-2.5 rounded-full transition bg-white/10 text-white font-semibold">
                 <span class="flex items-center space-x-3"><span>📊</span> <span>Overview</span></span>
             </button>
             <button onclick="switchTab('heimdall')" id="nav-heimdall" class="w-full flex items-center justify-between px-3.5 py-2.5 rounded-full transition text-slate-400 hover:text-white hover:bg-white/5">
-                <span class="flex items-center space-x-3"><span class="w-2 h-2 rounded-full bg-pink-500"></span> <span>Heimdall HIDS</span></span>
+                <span class="flex items-center space-x-3"><span class="health-dot health-unknown" id="health-heimdall"></span> <span>Heimdall HIDS</span></span>
             </button>
             <button onclick="switchTab('mjolnir')" id="nav-mjolnir" class="w-full flex items-center justify-between px-3.5 py-2.5 rounded-full transition text-slate-400 hover:text-white hover:bg-white/5">
-                <span class="flex items-center space-x-3"><span class="w-2 h-2 rounded-full bg-amber-500"></span> <span>Mjolnir Triage</span></span>
+                <span class="flex items-center space-x-3"><span class="health-dot health-unknown" id="health-mjolnir"></span> <span>Mjolnir Triage</span></span>
             </button>
             <button onclick="switchTab('bifrost')" id="nav-bifrost" class="w-full flex items-center justify-between px-3.5 py-2.5 rounded-full transition text-slate-400 hover:text-white hover:bg-white/5">
-                <span class="flex items-center space-x-3"><span class="w-2 h-2 rounded-full bg-cyan-500"></span> <span>Bifrost Network</span></span>
+                <span class="flex items-center space-x-3"><span class="health-dot health-unknown" id="health-bifrost"></span> <span>Bifrost Network</span></span>
             </button>
             <button onclick="switchTab('yggdrasil')" id="nav-yggdrasil" class="w-full flex items-center justify-between px-3.5 py-2.5 rounded-full transition text-slate-400 hover:text-white hover:bg-white/5">
-                <span class="flex items-center space-x-3"><span class="w-2 h-2 rounded-full bg-blue-500"></span> <span>Yggdrasil AD</span></span>
+                <span class="flex items-center space-x-3"><span class="health-dot health-unknown" id="health-yggdrasil"></span> <span>Yggdrasil AD</span></span>
             </button>
             <button onclick="switchTab('fenrir')" id="nav-fenrir" class="w-full flex items-center justify-between px-3.5 py-2.5 rounded-full transition text-slate-400 hover:text-white hover:bg-white/5">
-                <span class="flex items-center space-x-3"><span class="w-2 h-2 rounded-full bg-red-500"></span> <span>Fenrir CTI</span></span>
+                <span class="flex items-center space-x-3"><span class="health-dot health-unknown" id="health-fenrir"></span> <span>Fenrir CTI</span></span>
             </button>
             <button onclick="switchTab('sleipnir')" id="nav-sleipnir" class="w-full flex items-center justify-between px-3.5 py-2.5 rounded-full transition text-slate-400 hover:text-white hover:bg-white/5">
-                <span class="flex items-center space-x-3"><span class="w-2 h-2 rounded-full bg-purple-500"></span> <span>Sleipnir SOAR</span></span>
+                <span class="flex items-center space-x-3"><span class="health-dot health-unknown" id="health-sleipnir"></span> <span>Sleipnir SOAR</span></span>
+            </button>
+            <button onclick="switchTab('reports')" id="nav-reports" class="w-full flex items-center justify-between px-3.5 py-2.5 rounded-full transition text-slate-400 hover:text-white hover:bg-white/5">
+                <span class="flex items-center space-x-3"><span>📄</span> <span>Reports</span></span>
             </button>
             <button onclick="switchTab('ai')" id="nav-ai" class="w-full flex items-center justify-between px-3.5 py-2.5 rounded-full transition text-slate-400 hover:text-white hover:bg-white/5">
                 <span class="flex items-center space-x-3"><span>🤖</span> <span>AI Assistant</span></span>
@@ -72,33 +80,32 @@
     <!-- MAIN CONTENT AREA -->
     <main class="flex-1 flex flex-col overflow-hidden bg-[#000000]">
 
-        <!-- Top Header Bar -->
         <header class="h-16 bg-[#000000]/80 border-b border-[#1d1d1f] px-8 flex justify-between items-center z-10 backdrop-blur-md">
             <div class="flex items-center space-x-3">
                 <span id="pageTitle" class="text-sm font-semibold text-white tracking-wide">Overview Dashboard</span>
             </div>
             <div class="flex items-center space-x-4 text-xs font-mono">
+                <span id="execCounter" class="px-3 py-1.5 bg-[#1c1c1e] rounded-full text-slate-300 shadow-sm border border-white/5 hidden">0 executions</span>
                 <span class="px-3.5 py-1.5 bg-[#1c1c1e] rounded-full flex items-center text-emerald-400 shadow-sm border border-white/5">
                     <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse mr-2"></span> <span id="llmIndicator">6/6 Systems Online</span>
                 </span>
             </div>
         </header>
 
-        <!-- Dynamic Workspace Content -->
         <div class="flex-1 overflow-y-auto p-10 space-y-8 animate-slide">
 
-            <!---------------- 1. DASHBOARD OVERVIEW ---------------->
+            <!-- 1. DASHBOARD OVERVIEW -->
             <div id="panel-overview" class="space-y-8 max-w-7xl mx-auto">
                 <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
                     <div class="apple-glass p-6 rounded-3xl apple-glow">
                         <span class="text-[10px] font-mono accent-text uppercase tracking-widest font-semibold">Active Defenses</span>
-                        <h3 class="text-3xl font-bold mt-2 text-white">6 / 6</h3>
+                        <h3 class="text-3xl font-bold mt-2 text-white" id="onlineCount">6 / 6</h3>
                         <p class="text-xs text-slate-400 mt-1">All subsystems operational</p>
                     </div>
                     <div class="apple-glass p-6 rounded-3xl">
                         <span class="text-[10px] font-mono text-pink-400 uppercase tracking-widest font-semibold">HIDS Engine</span>
                         <h3 class="text-3xl font-bold mt-2 text-white">YAML Active</h3>
-                        <p class="text-xs text-slate-400 mt-1">Sliding-window threshold ready</p>
+                        <p class="text-xs text-slate-400 mt-1">5 detection rules loaded</p>
                     </div>
                     <div class="apple-glass p-6 rounded-3xl">
                         <span class="text-[10px] font-mono text-amber-400 uppercase tracking-widest font-semibold">VirusTotal API</span>
@@ -107,12 +114,11 @@
                     </div>
                     <div class="apple-glass p-6 rounded-3xl">
                         <span class="text-[10px] font-mono text-purple-400 uppercase tracking-widest font-semibold">SOAR Pipelines</span>
-                        <h3 class="text-3xl font-bold mt-2 text-white">Ready</h3>
-                        <p class="text-xs text-slate-400 mt-1">Automated playbooks loaded</p>
+                        <h3 class="text-3xl font-bold mt-2 text-white" id="totalExecs">0 Runs</h3>
+                        <p class="text-xs text-slate-400 mt-1">3 playbooks loaded</p>
                     </div>
                 </div>
 
-                <!-- LIVE TELEMETRY CHART -->
                 <div class="apple-glass p-8 rounded-3xl shadow-2xl space-y-4">
                     <div class="flex justify-between items-center">
                         <div>
@@ -121,14 +127,13 @@
                         </div>
                         <span class="text-xs font-mono px-3 py-1 bg-white/5 rounded-full text-emerald-400">● Live Stream</span>
                     </div>
-                    <div class="h-36 w-full flex items-end space-x-1.5 pt-4 border-b border-[#2c2c2e]" id="telemetryChart">
-                        <!-- Bars generated by JS -->
-                    </div>
+                    <div class="h-36 w-full flex items-end space-x-1.5 pt-4 border-b border-[#2c2c2e]" id="telemetryChart"></div>
+                    <div class="flex justify-between text-[10px] font-mono text-slate-500 mt-2" id="telemetryLegend"></div>
                 </div>
 
                 <div class="apple-glass p-8 rounded-3xl shadow-2xl">
                     <h2 class="text-xl font-bold text-white mb-2">Security Operations Center Command Center</h2>
-                    <p class="text-slate-400 text-sm mb-6">Select a module from the left sidebar or use keyboard shortcuts (<kbd class="px-2 py-1 bg-[#2c2c2e] rounded text-blue-400 font-mono">Ctrl+1..8</kbd>) to navigate instantly.</p>
+                    <p class="text-slate-400 text-sm mb-6">Select a module from the left sidebar or use keyboard shortcuts (<kbd class="px-2 py-1 bg-[#2c2c2e] rounded text-blue-400 font-mono">Ctrl+1..9</kbd>) to navigate instantly.</p>
                     <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
                         <div onclick="switchTab('heimdall')" class="apple-glass apple-glass-hover p-6 rounded-3xl cursor-pointer transition">
                             <span class="text-[10px] font-mono text-pink-400 font-semibold">MODULE I</span>
@@ -149,7 +154,7 @@
                 </div>
             </div>
 
-            <!---------------- 2. WORKSPACE PANELS ---------------->
+            <!-- 2. WORKSPACE PANELS -->
             <!-- HEIMDALL -->
             <div id="panel-heimdall" class="space-y-6 max-w-6xl mx-auto hidden">
                 <div class="apple-glass p-8 rounded-3xl shadow-2xl">
@@ -277,16 +282,43 @@
                 </div>
             </div>
 
+            <!-- REPORTS VIEWER -->
+            <div id="panel-reports" class="space-y-6 max-w-6xl mx-auto hidden">
+                <div class="apple-glass p-8 rounded-3xl shadow-2xl">
+                    <div class="flex justify-between items-center mb-6">
+                        <div>
+                            <span class="text-[10px] font-mono text-emerald-400 uppercase tracking-widest font-semibold">Generated Reports</span>
+                            <h2 class="text-2xl font-bold text-white mt-1">IR & Audit Reports</h2>
+                        </div>
+                        <button onclick="loadReports()" class="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 font-semibold text-xs rounded-full transition text-white shadow-lg">🔄 Refresh</button>
+                    </div>
+                    <p class="text-slate-400 text-sm mb-6">Markdown reports generated by Mjolnir (Incident Response) and Yggdrasil (AD Audit) modules.</p>
+                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        <div id="reportsList" class="bg-black border border-[#1d1d1f] rounded-2xl p-4 max-h-[500px] overflow-y-auto terminal-scroll space-y-1">
+                            <p class="text-slate-500 text-xs font-mono">Loading reports...</p>
+                        </div>
+                        <div id="reportPreview" class="lg:col-span-2 bg-black border border-[#1d1d1f] rounded-2xl p-5 font-mono text-xs text-slate-300 min-h-[400px] max-h-[500px] overflow-y-auto whitespace-pre-wrap terminal-scroll">
+                            Select a report from the list to view its contents...
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- AI ASSISTANT -->
             <div id="panel-ai" class="flex flex-col h-full max-w-6xl mx-auto hidden">
                 <div class="apple-glass p-8 rounded-3xl flex-1 flex flex-col h-[75vh] shadow-2xl">
-                    <h2 class="text-xl font-bold text-white mb-2">Ragnarök AI Assistant</h2>
-                    <p class="text-slate-400 text-xs mb-4">Chat with the AI orchestrator to investigate threats, analyze tool output, or trigger defensive actions.</p>
-                    
-                    <div id="chatBox" class="flex-1 p-5 overflow-y-auto terminal-scroll space-y-4 bg-black border border-[#1d1d1f] rounded-2xl mb-4">
+                    <div class="flex justify-between items-center mb-2">
+                        <div>
+                            <h2 class="text-xl font-bold text-white">Ragnarök AI Assistant</h2>
+                            <p class="text-slate-400 text-xs mt-1">Chat with the AI orchestrator. Conversation history is maintained across messages.</p>
+                        </div>
+                        <button onclick="clearChat()" class="px-3 py-1.5 bg-[#2c2c2e] hover:bg-[#3a3a3c] text-[10px] font-mono text-slate-400 rounded-full transition">Clear History</button>
+                    </div>
+
+                    <div id="chatBox" class="flex-1 p-5 overflow-y-auto terminal-scroll space-y-4 bg-black border border-[#1d1d1f] rounded-2xl mb-4 mt-3">
                         <div class="flex items-start space-x-3">
                             <div class="w-8 h-8 rounded-xl bg-blue-950 border border-blue-700 flex items-center justify-center text-blue-400 font-bold text-xs shrink-0 font-mono">AI</div>
-                            <div class="apple-glass p-4 rounded-xl text-xs leading-relaxed max-w-2xl font-mono">Ready. Ask me to run any module or analyze security telemetry. Ask about Ollama or OpenRouter configuration.</div>
+                            <div class="apple-glass p-4 rounded-xl text-xs leading-relaxed max-w-2xl font-mono">Ready. Ask me to run any module or analyze security telemetry. Say "run Mjolnir triage" or "scan network with Bifrost".</div>
                         </div>
                     </div>
 
@@ -298,10 +330,8 @@
             </div>
 
         </div>
-
     </main>
 
-    <!-- TOAST NOTIFICATION CONTAINER -->
     <div id="toastContainer" class="fixed bottom-6 right-6 z-50 space-y-3"></div>
 
     <!-- SETTINGS MODAL -->
@@ -309,7 +339,6 @@
         <div class="apple-glass p-8 rounded-3xl max-w-md w-full shadow-2xl border border-white/10 space-y-4">
             <h3 class="text-lg font-bold text-white">Universal LLM & Settings</h3>
             <p class="text-xs text-slate-400 mb-2">Configure your AI backend. Supports OpenRouter, Ollama (Local/Offline), OpenAI, and Claude.</p>
-            
             <div>
                 <label class="block text-xs font-mono text-slate-300 uppercase mb-2">Provider</label>
                 <select id="providerSelect" class="w-full bg-black border border-[#1d1d1f] rounded-full px-5 py-3 text-xs text-slate-200 font-mono focus:outline-none focus:border-blue-500">
@@ -318,17 +347,14 @@
                     <option value="openai">OpenAI Direct</option>
                 </select>
             </div>
-
             <div>
                 <label class="block text-xs font-mono text-slate-300 uppercase mb-2">API Key (Leave blank for Ollama)</label>
                 <input type="password" id="apiKeyInput" placeholder="sk-or-v1-... or sk-..." class="w-full bg-black border border-[#1d1d1f] rounded-full px-5 py-3 text-xs text-slate-200 font-mono focus:outline-none focus:border-blue-500">
             </div>
-
             <div>
                 <label class="block text-xs font-mono text-slate-300 uppercase mb-2">Model Name</label>
                 <input type="text" id="modelInput" placeholder="openai/gpt-4o-mini or llama3" class="w-full bg-black border border-[#1d1d1f] rounded-full px-5 py-3 text-xs text-slate-200 font-mono focus:outline-none focus:border-blue-500">
             </div>
-
             <div>
                 <label class="block text-xs font-mono text-slate-300 uppercase mb-2">Accent Color</label>
                 <div class="flex space-x-3">
@@ -338,7 +364,6 @@
                     <button onclick="setAccent('#ff9500', 'rgba(255, 149, 0, 0.2)')" class="w-8 h-8 rounded-full bg-[#ff9500] border-2 border-white/20"></button>
                 </div>
             </div>
-
             <div class="flex space-x-3 pt-4">
                 <button onclick="saveSettings()" class="flex-1 py-3 bg-blue-600 hover:bg-blue-500 font-semibold text-xs rounded-full text-white">Save Changes</button>
                 <button onclick="closeSettings()" class="px-5 py-3 bg-[#2c2c2e] text-slate-300 font-semibold text-xs rounded-full">Cancel</button>
@@ -347,10 +372,16 @@
     </div>
 
     <script>
-        const API_EXECUTE = "http://127.0.0.1:8080/api/v1/execute";
-        const API_CHAT = "http://127.0.0.1:8080/api/v1/chat";
+        const API_BASE = "http://127.0.0.1:8080";
+        const API_EXECUTE = API_BASE + "/api/v1/execute";
+        const API_CHAT = API_BASE + "/api/v1/chat";
+        const API_STATUS = API_BASE + "/api/v1/status";
+        const API_REPORTS = API_BASE + "/api/v1/reports";
 
-        const tabMap = ['overview', 'heimdall', 'mjolnir', 'bifrost', 'yggdrasil', 'fenrir', 'sleipnir', 'ai'];
+        const tabMap = ['overview', 'heimdall', 'mjolnir', 'bifrost', 'yggdrasil', 'fenrir', 'sleipnir', 'reports', 'ai'];
+        let chatHistory = [];
+        let telemetryData = new Array(45).fill(0).map(() => Math.floor(Math.random() * 40) + 10);
+        let totalExecs = 0;
 
         window.addEventListener('DOMContentLoaded', () => {
             const savedAccent = localStorage.getItem('asgard_accent');
@@ -358,6 +389,8 @@
             if (savedAccent) setAccent(savedAccent, savedGlow || 'rgba(0, 113, 227, 0.2)');
             initTelemetryChart();
             updateLlmIndicator();
+            refreshHealth();
+            setInterval(refreshHealth, 30000);
         });
 
         function setAccent(color, glow) {
@@ -369,32 +402,72 @@
 
         function updateLlmIndicator() {
             const provider = localStorage.getItem('asgard_provider') || 'openrouter';
-            const ind = document.getElementById('llmIndicator');
-            ind.textContent = `AI Provider: ${provider.toUpperCase()}`;
+            document.getElementById('llmIndicator').textContent = `AI Provider: ${provider.toUpperCase()}`;
+        }
+
+        async function refreshHealth() {
+            try {
+                const res = await fetch(API_STATUS);
+                const data = await res.json();
+                const mods = data.modules || {};
+                let online = 0;
+                for (const [key, info] of Object.entries(mods)) {
+                    const dot = document.getElementById('health-' + key);
+                    if (dot) {
+                        dot.className = 'health-dot ' + (info.healthy ? 'health-ok' : 'health-fail');
+                    }
+                    if (info.healthy) online++;
+                }
+                document.getElementById('onlineCount').textContent = `${online} / ${data.total_count || 6}`;
+                document.getElementById('llmIndicator').textContent = `${online}/${data.total_count || 6} Systems Online`;
+                if (data.executions) {
+                    totalExecs = Object.values(data.executions).reduce((a, b) => a + b, 0);
+                    document.getElementById('totalExecs').textContent = totalExecs + ' Runs';
+                    if (totalExecs > 0) {
+                        const ec = document.getElementById('execCounter');
+                        ec.textContent = totalExecs + ' executions';
+                        ec.classList.remove('hidden');
+                    }
+                }
+            } catch (e) {
+                document.getElementById('llmIndicator').textContent = 'Backend Offline';
+                document.getElementById('llmIndicator').parentElement.className = 'px-3.5 py-1.5 bg-[#1c1c1e] rounded-full flex items-center text-red-400 shadow-sm border border-white/5';
+            }
         }
 
         function initTelemetryChart() {
             const chart = document.getElementById('telemetryChart');
             if (!chart) return;
             chart.innerHTML = '';
-            for (let i = 0; i < 45; i++) {
+            telemetryData.forEach((val) => {
                 const bar = document.createElement('div');
-                const height = Math.floor(Math.random() * 80) + 20;
                 bar.className = "flex-1 bg-blue-500/30 hover:bg-blue-400 transition-all rounded-t";
-                bar.style.height = height + '%';
+                bar.style.height = val + '%';
                 chart.appendChild(bar);
-            }
+            });
             setInterval(() => {
                 const bars = chart.children;
                 if (bars.length > 0) {
                     const idx = Math.floor(Math.random() * bars.length);
-                    bars[idx].style.height = (Math.floor(Math.random() * 80) + 20) + '%';
+                    telemetryData[idx] = Math.floor(Math.random() * 80) + 20;
+                    bars[idx].style.height = telemetryData[idx] + '%';
                 }
             }, 800);
         }
 
+        function pulseTelemetry() {
+            const chart = document.getElementById('telemetryChart');
+            if (!chart) return;
+            const bars = chart.children;
+            for (let i = 0; i < 5; i++) {
+                const idx = Math.floor(Math.random() * bars.length);
+                telemetryData[idx] = Math.min(100, telemetryData[idx] + Math.floor(Math.random() * 20) + 10);
+                bars[idx].style.height = telemetryData[idx] + '%';
+            }
+        }
+
         window.addEventListener('keydown', (e) => {
-            if (e.ctrlKey && e.key >= '1' && e.key <= '8') {
+            if (e.ctrlKey && e.key >= '1' && e.key <= '9') {
                 e.preventDefault();
                 const index = parseInt(e.key) - 1;
                 if (tabMap[index]) switchTab(tabMap[index]);
@@ -407,36 +480,31 @@
         });
 
         function switchTab(tab) {
-            tabMap.forEach((p, idx) => {
-                document.getElementById('panel-' + p).classList.add('hidden');
+            tabMap.forEach((p) => {
+                const panel = document.getElementById('panel-' + p);
+                if (panel) panel.classList.add('hidden');
                 const navBtn = document.getElementById('nav-' + p);
-                if (navBtn) {
-                    navBtn.className = "w-full flex items-center justify-between px-3.5 py-2.5 rounded-full transition text-slate-400 hover:text-white hover:bg-white/5";
-                }
+                if (navBtn) navBtn.className = "w-full flex items-center justify-between px-3.5 py-2.5 rounded-full transition text-slate-400 hover:text-white hover:bg-white/5";
             });
-
-            document.getElementById('panel-' + tab).classList.remove('hidden');
+            const panel = document.getElementById('panel-' + tab);
+            if (panel) panel.classList.remove('hidden');
             const activeNav = document.getElementById('nav-' + tab);
-            if (activeNav) {
-                activeNav.className = "w-full flex items-center justify-between px-3.5 py-2.5 rounded-full transition bg-white/10 text-white font-semibold";
-            }
+            if (activeNav) activeNav.className = "w-full flex items-center justify-between px-3.5 py-2.5 rounded-full transition bg-white/10 text-white font-semibold";
             document.getElementById('pageTitle').textContent = tab === 'overview' ? 'Overview Dashboard' : (tab.toUpperCase() + ' WORKSPACE');
+            if (tab === 'reports') loadReports();
         }
 
         async function runModule(moduleName, actionName) {
             switchTab(moduleName);
             const outEl = document.getElementById('out-' + moduleName);
             const badgeEl = document.getElementById('badge-' + moduleName);
-
             outEl.textContent = `[+] Executing ${moduleName.toUpperCase()}... Please wait...`;
             badgeEl.className = "text-xs font-mono px-3 py-1 bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded-full animate-pulse";
             badgeEl.textContent = "Status: Executing...";
-
             const target = moduleName === 'bifrost' ? document.getElementById('targetHost').value : '127.0.0.1';
             const apiKey = localStorage.getItem('asgard_openai_key') || '';
             const provider = localStorage.getItem('asgard_provider') || 'openrouter';
             const model = localStorage.getItem('asgard_model') || 'openai/gpt-4o-mini';
-
             try {
                 const res = await fetch(API_EXECUTE, {
                     method: "POST",
@@ -448,6 +516,12 @@
                 badgeEl.className = "text-xs font-mono px-3 py-1 bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-full";
                 badgeEl.textContent = "Status: Success";
                 showToast(`Module ${moduleName.toUpperCase()} executed successfully!`, 'success');
+                pulseTelemetry();
+                totalExecs++;
+                document.getElementById('totalExecs').textContent = totalExecs + ' Runs';
+                const ec = document.getElementById('execCounter');
+                ec.textContent = totalExecs + ' executions';
+                ec.classList.remove('hidden');
             } catch (err) {
                 outEl.textContent = `[ERROR] Failed to communicate with backend server on port 8080.\nDetails: ${err}`;
                 badgeEl.className = "text-xs font-mono px-3 py-1 bg-red-500/20 text-red-400 border border-red-500/30 rounded-full";
@@ -462,23 +536,30 @@
             const prompt = input.value.trim();
             if (!prompt) return;
             input.value = "";
-
             appendChatMsg("User", prompt, true);
+            chatHistory.push({ role: "user", content: prompt });
             const apiKey = localStorage.getItem('asgard_openai_key') || '';
             const provider = localStorage.getItem('asgard_provider') || 'openrouter';
             const model = localStorage.getItem('asgard_model') || 'openai/gpt-4o-mini';
-
             try {
                 const res = await fetch(API_CHAT, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ prompt, api_key: apiKey, provider, model })
+                    body: JSON.stringify({ prompt, history: chatHistory.slice(-10), api_key: apiKey, provider, model })
                 });
                 const data = await res.json();
                 appendChatMsg("Ragnarök AI", data.output, false);
+                chatHistory.push({ role: "assistant", content: data.output || "" });
             } catch (err) {
                 appendChatMsg("Ragnarök AI", "Error connecting to backend server.", false);
             }
+        }
+
+        function clearChat() {
+            chatHistory = [];
+            const chatBox = document.getElementById('chatBox');
+            chatBox.innerHTML = `<div class="flex items-start space-x-3"><div class="w-8 h-8 rounded-xl bg-blue-950 border border-blue-700 flex items-center justify-center text-blue-400 font-bold text-xs shrink-0 font-mono">AI</div><div class="apple-glass p-4 rounded-xl text-xs leading-relaxed max-w-2xl font-mono">Conversation cleared. Ready for a new analysis session.</div></div>`;
+            showToast('Chat history cleared.', 'success');
         }
 
         function appendChatMsg(sender, text, isUser) {
@@ -494,23 +575,56 @@
             chatBox.scrollTop = chatBox.scrollHeight;
         }
 
+        async function loadReports() {
+            const listEl = document.getElementById('reportsList');
+            listEl.innerHTML = '<p class="text-slate-500 text-xs font-mono">Loading reports...</p>';
+            try {
+                const res = await fetch(API_REPORTS);
+                const data = await res.json();
+                if (!data.reports || data.reports.length === 0) {
+                    listEl.innerHTML = '<p class="text-slate-500 text-xs font-mono">No reports found. Run Mjolnir or Yggdrasil to generate reports.</p>';
+                    return;
+                }
+                listEl.innerHTML = '';
+                data.reports.forEach(r => {
+                    const item = document.createElement('div');
+                    item.className = 'report-item p-3 rounded-xl cursor-pointer transition border border-transparent hover:border-[#2c2c2e]';
+                    const icon = r.source === 'Mjolnir' ? '🔨' : '🌳';
+                    item.innerHTML = `<div class="flex items-center space-x-2"><span class="text-sm">${icon}</span><span class="text-xs font-mono text-white truncate">${r.filename}</span></div><div class="text-[10px] font-mono text-slate-500 mt-1">${r.source} • ${r.modified}</div>`;
+                    item.onclick = () => viewReport(r.path, item);
+                    listEl.appendChild(item);
+                });
+            } catch (e) {
+                listEl.innerHTML = '<p class="text-red-400 text-xs font-mono">Failed to load reports. Is the backend running?</p>';
+            }
+        }
+
+        async function viewReport(path, itemEl) {
+            const preview = document.getElementById('reportPreview');
+            preview.textContent = 'Loading report...';
+            document.querySelectorAll('.report-item').forEach(el => el.style.borderColor = 'transparent');
+            if (itemEl) itemEl.style.borderColor = 'var(--accent)';
+            try {
+                const res = await fetch(API_REPORTS + '/read?path=' + encodeURIComponent(path));
+                const data = await res.json();
+                preview.textContent = data.content || 'Empty report.';
+            } catch (e) {
+                preview.textContent = 'Failed to load report content.';
+            }
+        }
+
         function showToast(message, type = 'success') {
             const container = document.getElementById('toastContainer');
             const toast = document.createElement('div');
             toast.className = `apple-glass px-5 py-4 rounded-2xl shadow-2xl text-xs font-mono flex items-center space-x-3 border transition-opacity duration-300 ${type === 'success' ? 'border-emerald-500/40 bg-emerald-950/40 text-emerald-300' : 'border-red-500/40 bg-red-950/40 text-red-300'}`;
             toast.innerHTML = `<span>${type === 'success' ? '✅' : '❌'}</span> <span>${message}</span>`;
             container.appendChild(toast);
-            setTimeout(() => {
-                toast.style.opacity = '0';
-                setTimeout(() => toast.remove(), 300);
-            }, 4000);
+            setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 300); }, 4000);
         }
 
         function copyOutput(elementId) {
             const text = document.getElementById(elementId).textContent;
-            navigator.clipboard.writeText(text).then(() => {
-                showToast('Output copied to clipboard!', 'success');
-            });
+            navigator.clipboard.writeText(text).then(() => showToast('Output copied to clipboard!', 'success'));
         }
 
         function openSettings() {
@@ -527,14 +641,9 @@
         }
 
         function saveSettings() {
-            const key = document.getElementById('apiKeyInput').value.trim();
-            const provider = document.getElementById('providerSelect').value;
-            const model = document.getElementById('modelInput').value.trim();
-
-            localStorage.setItem('asgard_openai_key', key);
-            localStorage.setItem('asgard_provider', provider);
-            localStorage.setItem('asgard_model', model || 'openai/gpt-4o-mini');
-            
+            localStorage.setItem('asgard_openai_key', document.getElementById('apiKeyInput').value.trim());
+            localStorage.setItem('asgard_provider', document.getElementById('providerSelect').value);
+            localStorage.setItem('asgard_model', document.getElementById('modelInput').value.trim() || 'openai/gpt-4o-mini');
             updateLlmIndicator();
             closeSettings();
             showToast('LLM Settings saved successfully!', 'success');
