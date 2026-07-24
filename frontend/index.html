@@ -129,10 +129,20 @@
                             <h2 class="text-lg font-bold text-white">Live Telemetry & Threat Ingestion</h2>
                             <p class="text-xs text-slate-400">Real-time event throughput across Asgard security modules.</p>
                         </div>
-                        <span class="text-xs font-mono px-3 py-1 bg-white/5 rounded-full text-emerald-400">● Live Stream</span>
+                        <span class="text-xs font-mono px-3 py-1 bg-white/5 rounded-full text-emerald-400" id="wsStatus">● Connecting...</span>
                     </div>
                     <div class="h-36 w-full flex items-end space-x-1.5 pt-4 border-b border-[#2c2c2e]" id="telemetryChart"></div>
                     <div class="flex justify-between text-[10px] font-mono text-slate-500 mt-2" id="telemetryLegend"></div>
+                </div>
+
+                <div class="apple-glass p-6 rounded-3xl shadow-2xl">
+                    <div class="flex justify-between items-center mb-3">
+                        <h3 class="text-sm font-bold text-white">Live Event Stream</h3>
+                        <span class="text-[10px] font-mono text-slate-500" id="eventCount">0 events</span>
+                    </div>
+                    <div id="eventLog" class="bg-black border border-[#1d1d1f] rounded-2xl p-3 h-40 overflow-y-auto terminal-scroll font-mono text-[10px] space-y-1">
+                        <div class="text-slate-600">Waiting for WebSocket connection...</div>
+                    </div>
                 </div>
 
                 <div class="apple-glass p-8 rounded-3xl shadow-2xl">
@@ -249,6 +259,7 @@
                                     <tr>
                                         <th class="pb-2 pr-4">IP Address</th>
                                         <th class="pb-2 pr-4">Hostname</th>
+                                        <th class="pb-2 pr-4">OS Guess</th>
                                         <th class="pb-2 pr-4">Device Type</th>
                                         <th class="pb-2 pr-4">Open Ports</th>
                                         <th class="pb-2">Status</th>
@@ -419,6 +430,8 @@
         const API_CHAT = API_BASE + "/api/v1/chat";
         const API_STATUS = API_BASE + "/api/v1/status";
         const API_REPORTS = API_BASE + "/api/v1/reports";
+        const API_OLLAMA = API_BASE + "/api/v1/ollama/status";
+        const WS_URL = "ws://127.0.0.1:8080/ws/telemetry";
 
         const tabMap = ['overview', 'heimdall', 'mjolnir', 'bifrost', 'inventory', 'yggdrasil', 'fenrir', 'sleipnir', 'reports', 'ai'];
         let chatHistory = [];
@@ -433,7 +446,90 @@
             updateLlmIndicator();
             refreshHealth();
             setInterval(refreshHealth, 30000);
+            connectWebSocket();
+            detectOllama();
         });
+
+        let ws = null;
+        let eventCounter = 0;
+        const moduleColors = { heimdall: 'text-pink-400', mjolnir: 'text-amber-400', bifrost: 'text-cyan-400', yggdrasil: 'text-blue-400', fenrir: 'text-red-400', sleipnir: 'text-purple-400' };
+        const moduleNames = { heimdall: 'HEIMDALL', mjolnir: 'MJOLNIR', bifrost: 'BIFROST', yggdrasil: 'YGGDRASIL', fenrir: 'FENRIR', sleipnir: 'SLEIPNIR' };
+
+        function connectWebSocket() {
+            try {
+                ws = new WebSocket(WS_URL);
+                ws.onopen = () => {
+                    document.getElementById('wsStatus').textContent = '● Live Stream';
+                    document.getElementById('wsStatus').className = 'text-xs font-mono px-3 py-1 bg-white/5 rounded-full text-emerald-400';
+                    appendEvent('system', 'WebSocket connected — live telemetry active');
+                };
+                ws.onmessage = (evt) => {
+                    try {
+                        const data = JSON.parse(evt.data);
+                        handleTelemetryEvent(data);
+                    } catch(e) {}
+                };
+                ws.onclose = () => {
+                    document.getElementById('wsStatus').textContent = '● Reconnecting...';
+                    document.getElementById('wsStatus').className = 'text-xs font-mono px-3 py-1 bg-white/5 rounded-full text-amber-400';
+                    setTimeout(connectWebSocket, 3000);
+                };
+                ws.onerror = () => {};
+            } catch(e) {}
+        }
+
+        function handleTelemetryEvent(data) {
+            const mod = data.module || 'system';
+            const color = moduleColors[mod] || 'text-slate-400';
+            const name = moduleNames[mod] || mod.toUpperCase();
+            if (data.type === 'module_start') {
+                appendEvent(mod, `<span class="${color}">${name}</span> execution started`);
+                pulseTelemetry();
+            } else if (data.type === 'module_complete') {
+                appendEvent(mod, `<span class="${color}">${name}</span> completed`);
+                pulseTelemetry();
+            } else if (data.type === 'module_error') {
+                appendEvent(mod, `<span class="text-red-400">${name}</span> error: ${data.error || 'unknown'}`);
+            } else if (data.type === 'chat_module_trigger') {
+                appendEvent(mod, `<span class="${color}">${name}</span> triggered via AI chat`);
+            } else if (data.type === 'alert') {
+                appendEvent(mod, `<span class="text-red-400">ALERT:</span> ${data.message || ''}`);
+            }
+        }
+
+        function appendEvent(source, html) {
+            const log = document.getElementById('eventLog');
+            if (!log) return;
+            if (eventCounter === 0) log.innerHTML = '';
+            eventCounter++;
+            const ts = new Date().toLocaleTimeString('it-IT');
+            const div = document.createElement('div');
+            div.innerHTML = `<span class="text-slate-600">${ts}</span> ${html}`;
+            log.appendChild(div);
+            log.scrollTop = log.scrollHeight;
+            document.getElementById('eventCount').textContent = eventCounter + ' events';
+            if (log.children.length > 100) log.removeChild(log.firstChild);
+        }
+
+        async function detectOllama() {
+            try {
+                const res = await fetch(API_OLLAMA);
+                const data = await res.json();
+                if (data.available) {
+                    const select = document.getElementById('providerSelect');
+                    if (select) {
+                        const opt = document.createElement('option');
+                        opt.value = 'ollama';
+                        opt.textContent = `Ollama Local (${data.models.length} models)`;
+                        select.appendChild(opt);
+                    }
+                    const modelInput = document.getElementById('modelInput');
+                    if (modelInput && data.models.length > 0 && !modelInput.value) {
+                        modelInput.placeholder = data.models.join(', ') + ' or llama3';
+                    }
+                }
+            } catch(e) {}
+        }
 
         function setAccent(color, glow) {
             document.documentElement.style.setProperty('--accent', color);
@@ -592,14 +688,19 @@
                 const data = await res.json();
                 const lines = (data.output || '').split('\n').filter(l => l.includes('|'));
                 if (lines.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="5" class="py-4 text-slate-500 text-center">No assets discovered.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="6" class="py-4 text-slate-500 text-center">No assets discovered.</td></tr>';
                 } else {
                     lines.forEach(line => {
                         const parts = line.split('|').map(p => p.trim());
-                        const [ip, host, dev, ports, statusText] = parts;
+                        const ip = parts[0] || '';
+                        const host = parts[1] || '-';
+                        const osGuess = parts[2] || '-';
+                        const dev = parts[3] || '-';
+                        const ports = parts[4] || '-';
+                        const statusText = parts[5] || '-';
                         const tr = document.createElement('tr');
                         tr.className = 'hover:bg-white/[0.02]';
-                        tr.innerHTML = `<td class="py-2 pr-4 font-mono text-blue-400">${ip}</td><td class="py-2 pr-4">${host || '-'}</td><td class="py-2 pr-4">${dev || '-'}</td><td class="py-2 pr-4 font-mono text-xs">${ports || '-'}</td><td class="py-2"><span class="px-2 py-0.5 rounded-full text-xs ${statusText === 'UP' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-500/20 text-slate-400'}">${statusText || '-'}</span></td>`;
+                        tr.innerHTML = `<td class="py-2 pr-4 font-mono text-blue-400">${ip}</td><td class="py-2 pr-4">${host}</td><td class="py-2 pr-4 text-xs">${osGuess}</td><td class="py-2 pr-4">${dev}</td><td class="py-2 pr-4 font-mono text-xs">${ports}</td><td class="py-2"><span class="px-2 py-0.5 rounded-full text-xs ${statusText === 'UP' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-500/20 text-slate-400'}">${statusText}</span></td>`;
                         tbody.appendChild(tr);
                     });
                 }
@@ -607,7 +708,7 @@
                 showToast('LAN scan completed', 'success');
                 pulseTelemetry();
             } catch (err) {
-                tbody.innerHTML = `<tr><td colspan="5" class="py-4 text-red-400 text-center">Error: ${err}</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="6" class="py-4 text-red-400 text-center">Error: ${err}</td></tr>`;
                 results.classList.remove('hidden');
                 showToast('LAN scan failed', 'error');
             } finally {

@@ -5,9 +5,10 @@ import json
 import glob
 import time
 import re
+import asyncio
 import urllib.request
 import urllib.error
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
@@ -43,6 +44,54 @@ MODULE_STATUS: Dict[str, Dict[str, Any]] = {
 }
 
 EXEC_COUNTER: Dict[str, int] = {k: 0 for k in MODULE_STATUS}
+
+class TelemetryBroadcaster:
+    def __init__(self):
+        self.connections: List[WebSocket] = []
+        self.event_log: List[Dict[str, Any]] = []
+        self._max_log = 200
+
+    async def connect(self, ws: WebSocket):
+        await ws.accept()
+        self.connections.append(ws)
+        for evt in self.event_log[-50:]:
+            await ws.send_json(evt)
+
+    def disconnect(self, ws: WebSocket):
+        if ws in self.connections:
+            self.connections.remove(ws)
+
+    async def broadcast(self, event: Dict[str, Any]):
+        self.event_log.append(event)
+        if len(self.event_log) > self._max_log:
+            self.event_log = self.event_log[-self._max_log:]
+        dead = []
+        for ws in self.connections:
+            try:
+                await ws.send_json(event)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self.disconnect(ws)
+
+telemetry = TelemetryBroadcaster()
+
+class OllamaStatus(BaseModel):
+    available: bool
+    models: List[str] = []
+    url: str = "http://localhost:11434"
+
+@app.get("/api/v1/ollama/status")
+def get_ollama_status():
+    try:
+        url = "http://localhost:11434/api/tags"
+        req = urllib.request.Request(url, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            models = [m.get("name", "") for m in data.get("models", [])]
+            return {"available": True, "models": models, "url": "http://localhost:11434"}
+    except Exception:
+        return {"available": False, "models": [], "url": "http://localhost:11434"}
 
 class ActionRequest(BaseModel):
     module: str
@@ -117,6 +166,19 @@ def read_report(path: str):
         content = f.read()
     return {"filename": os.path.basename(path), "content": content}
 
+@app.websocket("/ws/telemetry")
+async def websocket_telemetry(ws: WebSocket):
+    await telemetry.connect(ws)
+    try:
+        while True:
+            data = await ws.receive_text()
+            if data == "ping":
+                await ws.send_json({"type": "pong", "ts": time.time()})
+    except WebSocketDisconnect:
+        telemetry.disconnect(ws)
+    except Exception:
+        telemetry.disconnect(ws)
+
 def _run_module_raw(mod: str, action: str = "default", target: str = "127.0.0.1") -> str:
     # Sanitize target to ensure safe IP / domain / CIDR format
     if not target or not re.match(r"^[a-zA-Z0-9\.\-_/:]+$", target):
@@ -148,9 +210,10 @@ def _run_module_raw(mod: str, action: str = "default", target: str = "127.0.0.1"
     return res.stdout or res.stderr
 
 @app.post("/api/v1/execute")
-def execute_module(req: ActionRequest):
+async def execute_module(req: ActionRequest):
+    mod = req.module.lower()
+    await telemetry.broadcast({"type": "module_start", "module": mod, "action": req.action, "ts": time.time()})
     try:
-        mod = req.module.lower()
         output = _run_module_raw(mod, req.action or "default", req.target or "127.0.0.1")
         if mod in EXEC_COUNTER:
             EXEC_COUNTER[mod] += 1
@@ -160,10 +223,13 @@ def execute_module(req: ActionRequest):
             analyzed = query_llm("Analyze this security execution output and summarize key findings as a senior SOC engineer.", output, req.provider, req.api_key, req.model)
             final_output = f"{output}\n\n--- [AI SECURITY ANALYST REPORT ({req.provider.upper()} / {req.model})] ---\n{analyzed}"
 
+        await telemetry.broadcast({"type": "module_complete", "module": mod, "ts": time.time(), "output_preview": (output[:200] if output else "")})
         return {"status": "success", "output": final_output}
     except subprocess.TimeoutExpired:
+        await telemetry.broadcast({"type": "module_error", "module": mod, "ts": time.time(), "error": "timeout"})
         return {"status": "error", "output": f"Module {req.module} timed out. The operation took too long."}
     except Exception as e:
+        await telemetry.broadcast({"type": "module_error", "module": mod, "ts": time.time(), "error": str(e)})
         return {"status": "error", "output": str(e)}
 
 def query_llm(prompt: str, tool_output: str, provider: str, api_key: str, model: str, history: Optional[List[Dict[str, str]]] = None) -> str:
@@ -214,31 +280,41 @@ def query_llm(prompt: str, tool_output: str, provider: str, api_key: str, model:
         return f"[AI Analysis Note: LLM request skipped or failed ({e}). Showing raw execution output above.]"
 
 @app.post("/api/v1/chat")
-def chat_orchestrator(req: ChatRequest):
+async def chat_orchestrator(req: ChatRequest):
     prompt = req.prompt.lower()
     tool_output = ""
+    triggered_module = None
 
     try:
         if "triage" in prompt or "mjolnir" in prompt:
             tool_output = _run_module_raw("mjolnir")
             EXEC_COUNTER["mjolnir"] += 1
+            triggered_module = "mjolnir"
         elif "scan" in prompt or "bifrost" in prompt:
             tool_output = _run_module_raw("bifrost")
             EXEC_COUNTER["bifrost"] += 1
+            triggered_module = "bifrost"
         elif "audit" in prompt or "ad" in prompt or "yggdrasil" in prompt:
             tool_output = _run_module_raw("yggdrasil")
             EXEC_COUNTER["yggdrasil"] += 1
+            triggered_module = "yggdrasil"
         elif "threat" in prompt or "fenrir" in prompt:
             tool_output = _run_module_raw("fenrir")
             EXEC_COUNTER["fenrir"] += 1
+            triggered_module = "fenrir"
         elif "heimdall" in prompt or "hids" in prompt:
             tool_output = _run_module_raw("heimdall")
             EXEC_COUNTER["heimdall"] += 1
+            triggered_module = "heimdall"
         elif "playbook" in prompt or "soar" in prompt or "sleipnir" in prompt:
             tool_output = _run_module_raw("sleipnir")
             EXEC_COUNTER["sleipnir"] += 1
+            triggered_module = "sleipnir"
         else:
             tool_output = f"Ragnarök AI Assistant: Processed query '{req.prompt}'. All 6 defense modules are active."
+
+        if triggered_module:
+            await telemetry.broadcast({"type": "chat_module_trigger", "module": triggered_module, "ts": time.time()})
 
         if req.provider == "ollama" or (req.api_key and len(req.api_key) > 5):
             final_reply = query_llm(req.prompt, tool_output, req.provider, req.api_key, req.model, req.history)
