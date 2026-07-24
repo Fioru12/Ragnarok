@@ -4,6 +4,7 @@ import subprocess
 import json
 import glob
 import time
+import re
 import urllib.request
 import urllib.error
 from fastapi import FastAPI, HTTPException
@@ -25,7 +26,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-ASGARD_ROOT = "C:\\Progetti\\Asgard"
+# Auto-detect ASGARD_ROOT relative to backend directory or fallback to environment variable
+DEFAULT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+ASGARD_ROOT = os.getenv("ASGARD_ROOT", DEFAULT_ROOT)
 FRONTEND_DIR = os.path.join(ASGARD_ROOT, "Ragnarok", "frontend")
 
 START_TIME = time.time()
@@ -115,6 +118,10 @@ def read_report(path: str):
     return {"filename": os.path.basename(path), "content": content}
 
 def _run_module_raw(mod: str, target: str = "127.0.0.1") -> str:
+    # Sanitize target to ensure safe IP / domain format
+    if not target or not re.match(r"^[a-zA-Z0-9\.\-:]+$", target):
+        target = "127.0.0.1"
+
     if mod == "heimdall":
         path = os.path.join(ASGARD_ROOT, "Heimdall")
         res = subprocess.run([sys.executable, "run_local_demo.py"], cwd=path, capture_output=True, text=True, encoding="utf-8", timeout=20)
