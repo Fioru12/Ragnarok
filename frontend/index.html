@@ -54,6 +54,9 @@
             <button onclick="switchTab('bifrost')" id="nav-bifrost" class="w-full flex items-center justify-between px-3.5 py-2.5 rounded-full transition text-slate-400 hover:text-white hover:bg-white/5">
                 <span class="flex items-center space-x-3"><span class="health-dot health-unknown" id="health-bifrost"></span> <span>Bifrost Network</span></span>
             </button>
+            <button onclick="switchTab('inventory')" id="nav-inventory" class="w-full flex items-center justify-between px-3.5 py-2.5 rounded-full transition text-slate-400 hover:text-white hover:bg-white/5">
+                <span class="flex items-center space-x-3"><span>🌐</span> <span>LAN Inventory</span></span>
+            </button>
             <button onclick="switchTab('yggdrasil')" id="nav-yggdrasil" class="w-full flex items-center justify-between px-3.5 py-2.5 rounded-full transition text-slate-400 hover:text-white hover:bg-white/5">
                 <span class="flex items-center space-x-3"><span class="health-dot health-unknown" id="health-yggdrasil"></span> <span>Yggdrasil AD</span></span>
             </button>
@@ -220,6 +223,44 @@
                 </div>
             </div>
 
+            <!-- LAN INVENTORY -->
+            <div id="panel-inventory" class="space-y-6 max-w-6xl mx-auto hidden">
+                <div class="flex items-center justify-between">
+                    <h2 class="text-2xl font-semibold">LAN Asset Discovery</h2>
+                    <span class="text-sm text-slate-500">Ctrl+5</span>
+                </div>
+                <p class="text-slate-400 text-sm">Scan a subnet to discover connected devices, open ports, and services.</p>
+                <div class="bg-slate-900/60 border border-slate-800/50 rounded-xl p-5">
+                    <label class="block text-xs font-medium text-slate-400 mb-1.5">Target Subnet (CIDR)</label>
+                    <div class="flex gap-3">
+                        <input id="inventory-target" type="text" placeholder="e.g. 192.168.1.0/24" class="flex-1 bg-slate-950/50 border border-slate-700/50 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-blue-500/50">
+                        <button onclick="runInventory()" id="inventory-btn" class="bg-emerald-600 hover:bg-emerald-500 text-white font-medium px-5 py-2 rounded-lg transition text-sm">Discover</button>
+                    </div>
+                </div>
+                <div id="inventory-status" class="text-sm text-slate-400 hidden">
+                    <span class="animate-pulse">Scanning subnet...</span>
+                </div>
+                <div id="inventory-results" class="hidden space-y-4">
+                    <div class="bg-slate-900/60 border border-slate-800/50 rounded-xl p-5">
+                        <h3 class="text-sm font-medium text-slate-300 mb-3">Discovered Assets</h3>
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-sm text-left">
+                                <thead class="text-xs text-slate-400 border-b border-slate-800/50">
+                                    <tr>
+                                        <th class="pb-2 pr-4">IP Address</th>
+                                        <th class="pb-2 pr-4">Hostname</th>
+                                        <th class="pb-2 pr-4">Device Type</th>
+                                        <th class="pb-2 pr-4">Open Ports</th>
+                                        <th class="pb-2">Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="inventory-table" class="divide-y divide-slate-800/30"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- YGGDRASIL -->
             <div id="panel-yggdrasil" class="space-y-6 max-w-6xl mx-auto hidden">
                 <div class="apple-glass p-8 rounded-3xl shadow-2xl">
@@ -379,7 +420,7 @@
         const API_STATUS = API_BASE + "/api/v1/status";
         const API_REPORTS = API_BASE + "/api/v1/reports";
 
-        const tabMap = ['overview', 'heimdall', 'mjolnir', 'bifrost', 'yggdrasil', 'fenrir', 'sleipnir', 'reports', 'ai'];
+        const tabMap = ['overview', 'heimdall', 'mjolnir', 'bifrost', 'inventory', 'yggdrasil', 'fenrir', 'sleipnir', 'reports', 'ai'];
         let chatHistory = [];
         let telemetryData = new Array(45).fill(0).map(() => Math.floor(Math.random() * 40) + 10);
         let totalExecs = 0;
@@ -528,6 +569,50 @@
                 badgeEl.className = "text-xs font-mono px-3 py-1 bg-red-500/20 text-red-400 border border-red-500/30 rounded-full";
                 badgeEl.textContent = "Status: Failed";
                 showToast(`Module ${moduleName.toUpperCase()} execution failed.`, 'error');
+            }
+        }
+
+        async function runInventory() {
+            const target = document.getElementById('inventory-target').value.trim();
+            if (!target) { showToast('Enter a subnet CIDR (e.g. 192.168.1.0/24)', 'error'); return; }
+            const btn = document.getElementById('inventory-btn');
+            const status = document.getElementById('inventory-status');
+            const results = document.getElementById('inventory-results');
+            const tbody = document.getElementById('inventory-table');
+            btn.disabled = true; btn.textContent = 'Scanning...';
+            status.classList.remove('hidden');
+            results.classList.add('hidden');
+            tbody.innerHTML = '';
+            try {
+                const res = await fetch(API_EXECUTE, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ module: 'bifrost', action: 'discover', target })
+                });
+                const data = await res.json();
+                const lines = (data.output || '').split('\n').filter(l => l.includes('|'));
+                if (lines.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="5" class="py-4 text-slate-500 text-center">No assets discovered.</td></tr>';
+                } else {
+                    lines.forEach(line => {
+                        const parts = line.split('|').map(p => p.trim());
+                        const [ip, host, dev, ports, statusText] = parts;
+                        const tr = document.createElement('tr');
+                        tr.className = 'hover:bg-white/[0.02]';
+                        tr.innerHTML = `<td class="py-2 pr-4 font-mono text-blue-400">${ip}</td><td class="py-2 pr-4">${host || '-'}</td><td class="py-2 pr-4">${dev || '-'}</td><td class="py-2 pr-4 font-mono text-xs">${ports || '-'}</td><td class="py-2"><span class="px-2 py-0.5 rounded-full text-xs ${statusText === 'UP' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-500/20 text-slate-400'}">${statusText || '-'}</span></td>`;
+                        tbody.appendChild(tr);
+                    });
+                }
+                results.classList.remove('hidden');
+                showToast('LAN scan completed', 'success');
+                pulseTelemetry();
+            } catch (err) {
+                tbody.innerHTML = `<tr><td colspan="5" class="py-4 text-red-400 text-center">Error: ${err}</td></tr>`;
+                results.classList.remove('hidden');
+                showToast('LAN scan failed', 'error');
+            } finally {
+                btn.disabled = false; btn.textContent = 'Discover';
+                status.classList.add('hidden');
             }
         }
 

@@ -117,9 +117,9 @@ def read_report(path: str):
         content = f.read()
     return {"filename": os.path.basename(path), "content": content}
 
-def _run_module_raw(mod: str, target: str = "127.0.0.1") -> str:
-    # Sanitize target to ensure safe IP / domain format
-    if not target or not re.match(r"^[a-zA-Z0-9\.\-:]+$", target):
+def _run_module_raw(mod: str, action: str = "default", target: str = "127.0.0.1") -> str:
+    # Sanitize target to ensure safe IP / domain / CIDR format
+    if not target or not re.match(r"^[a-zA-Z0-9\.\-_/:]+$", target):
         target = "127.0.0.1"
 
     if mod == "heimdall":
@@ -130,7 +130,10 @@ def _run_module_raw(mod: str, target: str = "127.0.0.1") -> str:
         res = subprocess.run([sys.executable, "main.py", "triage", "--simulate"], cwd=path, capture_output=True, text=True, encoding="utf-8", timeout=20)
     elif mod == "bifrost":
         path = os.path.join(ASGARD_ROOT, "Bifrost")
-        res = subprocess.run([sys.executable, "main.py", "scan", target, "--enrich"], cwd=path, capture_output=True, text=True, encoding="utf-8", timeout=25)
+        if action == "discover":
+            res = subprocess.run([sys.executable, "main.py", "discover", target], cwd=path, capture_output=True, text=True, encoding="utf-8", timeout=35)
+        else:
+            res = subprocess.run([sys.executable, "main.py", "scan", target, "--enrich"], cwd=path, capture_output=True, text=True, encoding="utf-8", timeout=25)
     elif mod == "yggdrasil":
         path = os.path.join(ASGARD_ROOT, "Yggdrasil")
         res = subprocess.run([sys.executable, "main.py", "audit"], cwd=path, capture_output=True, text=True, encoding="utf-8", timeout=20)
@@ -148,7 +151,7 @@ def _run_module_raw(mod: str, target: str = "127.0.0.1") -> str:
 def execute_module(req: ActionRequest):
     try:
         mod = req.module.lower()
-        output = _run_module_raw(mod, req.target or "127.0.0.1")
+        output = _run_module_raw(mod, req.action or "default", req.target or "127.0.0.1")
         if mod in EXEC_COUNTER:
             EXEC_COUNTER[mod] += 1
 
