@@ -8,7 +8,7 @@ import urllib.request
 import urllib.error
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 
@@ -62,6 +62,10 @@ def serve_frontend():
     if os.path.exists(index_path):
         return FileResponse(index_path)
     return {"status": "online", "system": "Asgard Enterprise SOC"}
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    return Response(status_code=204)
 
 @app.get("/api/v1/status")
 def get_status():
