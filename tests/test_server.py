@@ -114,7 +114,25 @@ def test_audit_log_pagination_params_are_respected():
 
 # --- 2. Real health check ---
 
+def _use_fake_asgard_root(monkeypatch):
+    """The health check needs each module's entry file to exist on disk
+    before it will even attempt to spawn a subprocess (see
+    _check_module_health). In an isolated checkout of just this repo (e.g.
+    CI), the sibling module directories referenced by ASGARD_ROOT don't
+    exist. Point ASGARD_ROOT at a throwaway directory with empty stand-in
+    entry files so these tests exercise the subprocess-mocking behavior
+    itself, independent of what else happens to be checked out alongside
+    Ragnarok."""
+    fake_root = tempfile.mkdtemp(prefix="ragnarok_fake_asgard_root_")
+    for info in server.MODULE_STATUS.values():
+        mod_dir = os.path.join(fake_root, info["path"])
+        os.makedirs(mod_dir, exist_ok=True)
+        open(os.path.join(mod_dir, info["entry"]), "a").close()
+    monkeypatch.setattr(server, "ASGARD_ROOT", fake_root)
+
+
 def test_status_reports_healthy_when_subprocess_exits_zero(monkeypatch):
+    _use_fake_asgard_root(monkeypatch)
     _reset_module_health_cache()
     create_mock = AsyncMock(return_value=_make_fake_proc(returncode=0))
     monkeypatch.setattr(server.asyncio, "create_subprocess_exec", create_mock)
@@ -128,6 +146,7 @@ def test_status_reports_healthy_when_subprocess_exits_zero(monkeypatch):
 
 
 def test_status_reports_degraded_when_subprocess_exits_nonzero(monkeypatch):
+    _use_fake_asgard_root(monkeypatch)
     _reset_module_health_cache()
     create_mock = AsyncMock(return_value=_make_fake_proc(returncode=1, stderr=b"boom: no --help"))
     monkeypatch.setattr(server.asyncio, "create_subprocess_exec", create_mock)
@@ -141,6 +160,7 @@ def test_status_reports_degraded_when_subprocess_exits_nonzero(monkeypatch):
 
 
 def test_status_falls_back_to_file_check_when_subprocess_cannot_spawn(monkeypatch):
+    _use_fake_asgard_root(monkeypatch)
     _reset_module_health_cache()
 
     async def _raise(*args, **kwargs):
@@ -151,8 +171,8 @@ def test_status_falls_back_to_file_check_when_subprocess_cannot_spawn(monkeypatc
     res = client.get("/api/v1/status")
     assert res.status_code == 200
     modules = res.json()["modules"]
-    # All entry files exist on disk in this repo, so the fallback should
-    # report healthy=True even though the subprocess check itself failed.
+    # The fake entry files exist on disk, so the fallback should report
+    # healthy=True even though the subprocess check itself failed.
     assert all(m["healthy"] is True for m in modules.values())
 
 
