@@ -445,6 +445,11 @@
                 <input type="text" id="modelInput" placeholder="openai/gpt-4o-mini or llama3" class="w-full bg-black border border-[#1d1d1f] rounded-full px-5 py-3 text-xs text-slate-200 font-mono focus:outline-none focus:border-blue-500">
             </div>
             <div>
+                <label class="block text-xs font-mono text-slate-300 uppercase mb-2">Ragnarök Backend API Key</label>
+                <input type="password" id="ragnarokKeyInput" placeholder="value of RAGNAROK_API_KEY" class="w-full bg-black border border-[#1d1d1f] rounded-full px-5 py-3 text-xs text-slate-200 font-mono focus:outline-none focus:border-blue-500">
+                <p class="text-[10px] text-slate-500 mt-1">Sent as the X-API-Key header on /execute and /chat calls. Printed to the backend console on first startup if RAGNAROK_API_KEY is not set.</p>
+            </div>
+            <div>
                 <label class="block text-xs font-mono text-slate-300 uppercase mb-2">Accent Color</label>
                 <div class="flex space-x-3">
                     <button onclick="setAccent('#0071e3', 'rgba(0, 113, 227, 0.2)')" class="w-8 h-8 rounded-full bg-[#0071e3] border-2 border-white/20"></button>
@@ -682,7 +687,7 @@
             try {
                 const res = await fetch(API_EXECUTE, {
                     method: "POST",
-                    headers: { "Content-Type": "application/json" },
+                    headers: { "Content-Type": "application/json", ...ragnarokAuthHeaders() },
                     body: JSON.stringify({ module: moduleName, action: actionName, target, api_key: apiKey, provider, model })
                 });
                 const data = await res.json();
@@ -736,6 +741,8 @@
                 showToast('Threat hunt failed', 'error');
             }
         }
+
+        async function runInventory() {
             const target = document.getElementById('inventory-target').value.trim();
             if (!target) { showToast('Enter a subnet CIDR (e.g. 192.168.1.0/24)', 'error'); return; }
             const btn = document.getElementById('inventory-btn');
@@ -749,7 +756,7 @@
             try {
                 const res = await fetch(API_EXECUTE, {
                     method: "POST",
-                    headers: { "Content-Type": "application/json" },
+                    headers: { "Content-Type": "application/json", ...ragnarokAuthHeaders() },
                     body: JSON.stringify({ module: 'bifrost', action: 'discover', target })
                 });
                 const data = await res.json();
@@ -798,7 +805,7 @@
             try {
                 const res = await fetch(API_CHAT, {
                     method: "POST",
-                    headers: { "Content-Type": "application/json" },
+                    headers: { "Content-Type": "application/json", ...ragnarokAuthHeaders() },
                     body: JSON.stringify({ prompt, history: chatHistory.slice(-10), api_key: apiKey, provider, model })
                 });
                 const data = await res.json();
@@ -885,6 +892,7 @@
             document.getElementById('apiKeyInput').value = localStorage.getItem('asgard_openai_key') || '';
             document.getElementById('providerSelect').value = localStorage.getItem('asgard_provider') || 'openrouter';
             document.getElementById('modelInput').value = localStorage.getItem('asgard_model') || 'openai/gpt-4o-mini';
+            document.getElementById('ragnarokKeyInput').value = localStorage.getItem('asgard_ragnarok_key') || '';
             document.getElementById('settingsModal').classList.remove('hidden');
             document.getElementById('settingsModal').classList.add('flex');
         }
@@ -898,9 +906,15 @@
             localStorage.setItem('asgard_openai_key', document.getElementById('apiKeyInput').value.trim());
             localStorage.setItem('asgard_provider', document.getElementById('providerSelect').value);
             localStorage.setItem('asgard_model', document.getElementById('modelInput').value.trim() || 'openai/gpt-4o-mini');
+            localStorage.setItem('asgard_ragnarok_key', document.getElementById('ragnarokKeyInput').value.trim());
             updateLlmIndicator();
             closeSettings();
             showToast('LLM Settings saved successfully!', 'success');
+        }
+
+        function ragnarokAuthHeaders() {
+            const key = localStorage.getItem('asgard_ragnarok_key') || '';
+            return key ? { "X-API-Key": key } : {};
         }
 
         function escapeHtml(string) {

@@ -4,3 +4,9 @@ __pycache__/
 reports/
 .venv/
 *.egg-info/
+
+# Node / Tauri CLI
+node_modules/
+
+# Rust / Tauri build output (also covered by src-tauri/.gitignore)
+src-tauri/target/

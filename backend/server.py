@@ -1,6 +1,8 @@
 import sys
 import os
+import secrets
 import subprocess
+import sqlite3
 import json
 import glob
 import time
@@ -8,7 +10,7 @@ import re
 import asyncio
 import urllib.request
 import urllib.error
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
@@ -19,13 +21,51 @@ if hasattr(sys.stdout, "reconfigure"):
 
 app = FastAPI(title="Asgard Enterprise SOC Orchestrator", version="6.0.0")
 
+# CORS: restricted to the local origins the Ragnarok desktop shell is expected
+# to run from during development. Using "*" together with allow_credentials
+# would let ANY web page open in the user's browser call this local API (which
+# can execute scans/audits on the host) — Starlette actually rejects that
+# combination outright, but even a permissive explicit wildcard would be a
+# real risk here, so we enumerate the known-good origins instead.
+# - http://localhost:1420 / http://127.0.0.1:1420: default Vite/Tauri dev server port
+# - tauri://localhost: origin used by the built Tauri webview on Windows/Linux
+# - https://tauri.localhost: origin used by the built Tauri webview on some platforms
+# Add any additional dev origins here explicitly if the frontend is served elsewhere.
+ALLOWED_ORIGINS = [
+    "http://localhost:1420",
+    "http://127.0.0.1:1420",
+    "tauri://localhost",
+    "https://tauri.localhost",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# --- Minimal API key protection for action-executing endpoints ---
+# Endpoints that trigger module execution (subprocess launches, network scans,
+# AD audits, etc.) require an X-API-Key header matching RAGNAROK_API_KEY.
+# Status/health/report-reading endpoints stay open since they only expose
+# read-only local state.
+RAGNAROK_API_KEY = os.getenv("RAGNAROK_API_KEY")
+if not RAGNAROK_API_KEY:
+    RAGNAROK_API_KEY = secrets.token_urlsafe(32)
+    print("=" * 70)
+    print("[RAGNAROK] RAGNAROK_API_KEY not set — generated a temporary key:")
+    print(f"[RAGNAROK]   {RAGNAROK_API_KEY}")
+    print("[RAGNAROK] Set RAGNAROK_API_KEY in your environment to persist it.")
+    print("[RAGNAROK] Send it back as the 'X-API-Key' header on execute/chat calls.")
+    print("=" * 70)
+
+
+def require_api_key(x_api_key: Optional[str] = Header(default=None)):
+    if not x_api_key or x_api_key != RAGNAROK_API_KEY:
+        raise HTTPException(status_code=401, detail="Missing or invalid X-API-Key header")
+    return x_api_key
 
 # Auto-detect ASGARD_ROOT relative to backend directory or fallback to environment variable
 DEFAULT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -33,6 +73,54 @@ ASGARD_ROOT = os.getenv("ASGARD_ROOT", DEFAULT_ROOT)
 FRONTEND_DIR = os.path.join(ASGARD_ROOT, "Ragnarok", "frontend")
 
 START_TIME = time.time()
+
+# --- Persistent audit log (SQLite) ---
+# The in-memory event_log on TelemetryBroadcaster is capped at 200 entries and
+# lost on restart. Every event that is broadcast is now also written to this
+# SQLite database so the audit trail survives process restarts and can be
+# paginated via GET /api/v1/audit-log.
+AUDIT_DB_PATH = os.getenv(
+    "RAGNAROK_AUDIT_DB_PATH",
+    os.path.join(os.path.dirname(__file__), "ragnarok_audit.db"),
+)
+
+
+def init_audit_db() -> None:
+    conn = sqlite3.connect(AUDIT_DB_PATH)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp REAL NOT NULL,
+                type TEXT NOT NULL,
+                payload TEXT
+            )
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+init_audit_db()
+
+
+def record_audit_event(event: Dict[str, Any]) -> None:
+    """Persist an event to the audit SQLite DB. Never raises: a DB hiccup
+    should not take down telemetry broadcasting."""
+    try:
+        conn = sqlite3.connect(AUDIT_DB_PATH)
+        try:
+            conn.execute(
+                "INSERT INTO events (timestamp, type, payload) VALUES (?, ?, ?)",
+                (event.get("ts", time.time()), event.get("type", "unknown"), json.dumps(event)),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"[RAGNAROK] Failed to persist audit event: {e}")
 
 MODULE_STATUS: Dict[str, Dict[str, Any]] = {
     "heimdall": {"name": "Heimdall HIDS", "path": "Heimdall", "entry": "run_local_demo.py", "healthy": False, "last_check": 0},
@@ -65,6 +153,7 @@ class TelemetryBroadcaster:
         self.event_log.append(event)
         if len(self.event_log) > self._max_log:
             self.event_log = self.event_log[-self._max_log:]
+        record_audit_event(event)
         dead = []
         for ws in self.connections:
             try:
@@ -107,6 +196,27 @@ class ChatRequest(BaseModel):
     api_key: Optional[str] = None
     provider: Optional[str] = "openrouter"
     model: Optional[str] = "openai/gpt-4o-mini"
+    confirm: bool = False
+
+
+# Keyword -> module routing table shared by the "detect" and "execute" halves
+# of the chat orchestrator, so the proposed action shown to the user (before
+# confirm=true) always matches exactly what will actually run.
+CHAT_KEYWORD_ROUTES = [
+    (("triage", "mjolnir"), "mjolnir"),
+    (("scan", "bifrost"), "bifrost"),
+    (("audit", "ad", "yggdrasil"), "yggdrasil"),
+    (("threat", "fenrir"), "fenrir"),
+    (("heimdall", "hids"), "heimdall"),
+    (("playbook", "soar", "sleipnir"), "sleipnir"),
+]
+
+
+def _detect_chat_module(prompt_lower: str) -> Optional[str]:
+    for keywords, module in CHAT_KEYWORD_ROUTES:
+        if any(kw in prompt_lower for kw in keywords):
+            return module
+    return None
 
 @app.get("/")
 def serve_frontend():
@@ -119,26 +229,113 @@ def serve_frontend():
 def favicon():
     return Response(status_code=204)
 
+async def _check_module_health(mod_key: str, info: Dict[str, Any]) -> Dict[str, Any]:
+    """Real health check: try to actually run the module's entry point with
+    --help and treat a clean (exit code 0) run as healthy. Falls back to the
+    old "file exists" check when the subprocess itself cannot be spawned or
+    times out (e.g. no python interpreter available, permissions issue) —
+    NOT merely because the module doesn't understand --help, which instead
+    surfaces as "degraded" with the module's own error output."""
+    mod_path = os.path.join(ASGARD_ROOT, info["path"])
+    entry_file = os.path.join(mod_path, info["entry"])
+
+    file_exists = os.path.isfile(entry_file)
+    if not file_exists:
+        return {"healthy": False, "status": "degraded", "error": "entry file not found"}
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, info["entry"], "--help",
+            cwd=mod_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=5)
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:
+                pass
+            return {"healthy": False, "status": "degraded", "error": "health check timed out after 5s"}
+
+        if proc.returncode == 0:
+            return {"healthy": True, "status": "healthy", "error": None}
+
+        err_text = (stderr or stdout or b"").decode("utf-8", errors="replace").strip()
+        return {
+            "healthy": False,
+            "status": "degraded",
+            "error": err_text[:500] or f"exit code {proc.returncode}",
+        }
+    except Exception as e:
+        # Subprocess could not even be spawned for an unexpected reason —
+        # fall back to the simple "file exists" check.
+        return {
+            "healthy": file_exists,
+            "status": "healthy" if file_exists else "degraded",
+            "error": None if file_exists else f"health check unavailable: {e}",
+        }
+
+
 @app.get("/api/v1/status")
-def get_status():
+async def get_status():
     now = time.time()
     for mod_key, info in MODULE_STATUS.items():
         if now - info["last_check"] < 30:
             continue
-        mod_path = os.path.join(ASGARD_ROOT, info["path"])
-        entry_file = os.path.join(mod_path, info["entry"])
-        info["healthy"] = os.path.isfile(entry_file)
+        result = await _check_module_health(mod_key, info)
+        info["healthy"] = result["healthy"]
+        info["health_status"] = result["status"]
+        info["health_error"] = result["error"]
         info["last_check"] = now
 
     online = sum(1 for m in MODULE_STATUS.values() if m["healthy"])
     return {
         "status": "online",
         "uptime_seconds": int(time.time() - START_TIME),
-        "modules": {k: {"name": v["name"], "healthy": v["healthy"]} for k, v in MODULE_STATUS.items()},
+        "modules": {
+            k: {
+                "name": v["name"],
+                "healthy": v["healthy"],
+                "health_status": v.get("health_status", "unknown"),
+                "health_error": v.get("health_error"),
+            }
+            for k, v in MODULE_STATUS.items()
+        },
         "online_count": online,
         "total_count": len(MODULE_STATUS),
         "executions": EXEC_COUNTER,
     }
+
+
+@app.get("/api/v1/audit-log")
+def get_audit_log(limit: int = 50, offset: int = 0, _api_key: str = Depends(require_api_key)):
+    limit = max(1, min(limit, 500))
+    offset = max(0, offset)
+    conn = sqlite3.connect(AUDIT_DB_PATH)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, timestamp, type, payload FROM events ORDER BY id DESC LIMIT ? OFFSET ?",
+            (limit, offset),
+        )
+        rows = cur.fetchall()
+        cur.execute("SELECT COUNT(*) FROM events")
+        total = cur.fetchone()[0]
+    finally:
+        conn.close()
+
+    events = []
+    for row_id, ts, ev_type, payload in rows:
+        try:
+            parsed_payload = json.loads(payload) if payload else None
+        except (TypeError, ValueError):
+            parsed_payload = None
+        events.append({"id": row_id, "timestamp": ts, "type": ev_type, "payload": parsed_payload})
+
+    return {"events": events, "total": total, "limit": limit, "offset": offset}
 
 @app.get("/api/v1/reports")
 def list_reports():
@@ -217,42 +414,71 @@ async def websocket_telemetry(ws: WebSocket):
     except Exception:
         telemetry.disconnect(ws)
 
-def _run_module_raw(mod: str, action: str = "default", target: str = "127.0.0.1") -> str:
+def _build_module_command(mod: str, action: str = "default", target: str = "127.0.0.1"):
+    """Return (cwd, argv, timeout) for a module invocation, or None for an
+    unknown module. Shared between the real async runner and the chat
+    "proposed action" preview so both describe the exact same command."""
     # Sanitize target to ensure safe IP / domain / CIDR format
     if not target or not re.match(r"^[a-zA-Z0-9\.\-_/:]+$", target):
         target = "127.0.0.1"
 
     if mod == "heimdall":
         path = os.path.join(ASGARD_ROOT, "Heimdall")
-        res = subprocess.run([sys.executable, "run_local_demo.py"], cwd=path, capture_output=True, text=True, encoding="utf-8", timeout=20)
+        return path, [sys.executable, "run_local_demo.py"], 20
     elif mod == "mjolnir":
         path = os.path.join(ASGARD_ROOT, "Mjolnir")
-        res = subprocess.run([sys.executable, "main.py", "triage", "--simulate"], cwd=path, capture_output=True, text=True, encoding="utf-8", timeout=20)
+        return path, [sys.executable, "main.py", "triage", "--simulate"], 20
     elif mod == "bifrost":
         path = os.path.join(ASGARD_ROOT, "Bifrost")
         if action == "discover":
-            res = subprocess.run([sys.executable, "main.py", "discover", target], cwd=path, capture_output=True, text=True, encoding="utf-8", timeout=35)
-        else:
-            res = subprocess.run([sys.executable, "main.py", "scan", target, "--enrich"], cwd=path, capture_output=True, text=True, encoding="utf-8", timeout=25)
+            return path, [sys.executable, "main.py", "discover", target], 35
+        return path, [sys.executable, "main.py", "scan", target, "--enrich"], 25
     elif mod == "yggdrasil":
         path = os.path.join(ASGARD_ROOT, "Yggdrasil")
-        res = subprocess.run([sys.executable, "main.py", "audit"], cwd=path, capture_output=True, text=True, encoding="utf-8", timeout=20)
+        return path, [sys.executable, "main.py", "audit"], 20
     elif mod == "fenrir":
         path = os.path.join(ASGARD_ROOT, "Fenrir")
-        res = subprocess.run([sys.executable, "main.py", "update"], cwd=path, capture_output=True, text=True, encoding="utf-8", timeout=20)
+        return path, [sys.executable, "main.py", "update"], 20
     elif mod == "sleipnir":
         path = os.path.join(ASGARD_ROOT, "Sleipnir")
-        res = subprocess.run([sys.executable, "main.py", "run"], cwd=path, capture_output=True, text=True, encoding="utf-8", timeout=35)
-    else:
+        return path, [sys.executable, "main.py", "run"], 35
+    return None
+
+
+async def _run_module_raw(mod: str, action: str = "default", target: str = "127.0.0.1") -> str:
+    """Run a module's CLI entry point asynchronously so long-running scans/
+    audits (20-35s) don't block the FastAPI event loop while they execute."""
+    built = _build_module_command(mod, action, target)
+    if built is None:
         return f"Unknown module: {mod}"
-    return res.stdout or res.stderr
+    path, argv, timeout = built
+
+    proc = await asyncio.create_subprocess_exec(
+        *argv,
+        cwd=path,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+            await proc.wait()
+        except Exception:
+            pass
+        raise subprocess.TimeoutExpired(argv, timeout)
+
+    stdout_text = (stdout or b"").decode("utf-8", errors="replace")
+    stderr_text = (stderr or b"").decode("utf-8", errors="replace")
+    return stdout_text or stderr_text
 
 @app.post("/api/v1/execute")
-async def execute_module(req: ActionRequest):
+async def execute_module(req: ActionRequest, _api_key: str = Depends(require_api_key)):
     mod = req.module.lower()
     await telemetry.broadcast({"type": "module_start", "module": mod, "action": req.action, "ts": time.time()})
     try:
-        output = _run_module_raw(mod, req.action or "default", req.target or "127.0.0.1")
+        output = await _run_module_raw(mod, req.action or "default", req.target or "127.0.0.1")
         if mod in EXEC_COUNTER:
             EXEC_COUNTER[mod] += 1
 
@@ -318,36 +544,39 @@ def query_llm(prompt: str, tool_output: str, provider: str, api_key: str, model:
         return f"[AI Analysis Note: LLM request skipped or failed ({e}). Showing raw execution output above.]"
 
 @app.post("/api/v1/chat")
-async def chat_orchestrator(req: ChatRequest):
+async def chat_orchestrator(req: ChatRequest, _api_key: str = Depends(require_api_key)):
     prompt = req.prompt.lower()
-    tool_output = ""
-    triggered_module = None
+    triggered_module = _detect_chat_module(prompt)
 
+    # Human-confirmation gate: an AI-identified action that would execute a
+    # real module (subprocess launch) is only a *proposal* until the caller
+    # resends the request with confirm=true.
+    if triggered_module and not req.confirm:
+        built = _build_module_command(triggered_module)
+        proposed_command = " ".join(built[1]) if built else None
+        await telemetry.broadcast({
+            "type": "chat_action_proposed",
+            "module": triggered_module,
+            "ts": time.time(),
+        })
+        return {
+            "status": "confirmation_required",
+            "output": (
+                f"Ho identificato l'azione '{triggered_module}'. "
+                "Invia di nuovo la richiesta con confirm=true per eseguirla."
+            ),
+            "proposed_action": {
+                "module": triggered_module,
+                "command": proposed_command,
+                "target": "127.0.0.1",
+            },
+        }
+
+    tool_output = ""
     try:
-        if "triage" in prompt or "mjolnir" in prompt:
-            tool_output = _run_module_raw("mjolnir")
-            EXEC_COUNTER["mjolnir"] += 1
-            triggered_module = "mjolnir"
-        elif "scan" in prompt or "bifrost" in prompt:
-            tool_output = _run_module_raw("bifrost")
-            EXEC_COUNTER["bifrost"] += 1
-            triggered_module = "bifrost"
-        elif "audit" in prompt or "ad" in prompt or "yggdrasil" in prompt:
-            tool_output = _run_module_raw("yggdrasil")
-            EXEC_COUNTER["yggdrasil"] += 1
-            triggered_module = "yggdrasil"
-        elif "threat" in prompt or "fenrir" in prompt:
-            tool_output = _run_module_raw("fenrir")
-            EXEC_COUNTER["fenrir"] += 1
-            triggered_module = "fenrir"
-        elif "heimdall" in prompt or "hids" in prompt:
-            tool_output = _run_module_raw("heimdall")
-            EXEC_COUNTER["heimdall"] += 1
-            triggered_module = "heimdall"
-        elif "playbook" in prompt or "soar" in prompt or "sleipnir" in prompt:
-            tool_output = _run_module_raw("sleipnir")
-            EXEC_COUNTER["sleipnir"] += 1
-            triggered_module = "sleipnir"
+        if triggered_module:
+            tool_output = await _run_module_raw(triggered_module)
+            EXEC_COUNTER[triggered_module] += 1
         else:
             tool_output = f"Ragnarök AI Assistant: Processed query '{req.prompt}'. All 6 defense modules are active."
 
