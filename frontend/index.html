@@ -75,6 +75,9 @@
             <button onclick="switchTab('ai')" id="nav-ai" class="w-full flex items-center justify-between px-3.5 py-2.5 rounded-full transition text-slate-400 hover:text-white hover:bg-white/5">
                 <span class="flex items-center space-x-3"><span>🤖</span> <span>AI Assistant</span></span>
             </button>
+            <button onclick="switchTab('setup')" id="nav-setup" class="w-full flex items-center justify-between px-3.5 py-2.5 rounded-full transition text-slate-400 hover:text-white hover:bg-white/5">
+                <span class="flex items-center space-x-3"><span>🔑</span> <span>Configurazione</span></span>
+            </button>
         </nav>
 
         <div class="p-4 border-t border-[#1d1d1f] text-xs">
@@ -105,24 +108,37 @@
             <div id="panel-overview" class="space-y-8 max-w-7xl mx-auto">
                 <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
                     <div class="apple-glass p-6 rounded-3xl apple-glow">
-                        <span class="text-[10px] font-mono accent-text uppercase tracking-widest font-semibold">Active Defenses</span>
-                        <h3 class="text-3xl font-bold mt-2 text-white" id="onlineCount">6 / 6</h3>
-                        <p class="text-xs text-slate-400 mt-1">All subsystems operational</p>
+                        <span class="text-[10px] font-mono accent-text uppercase tracking-widest font-semibold">Moduli Attivi</span>
+                        <h3 class="text-3xl font-bold mt-2 text-white" id="onlineCount">— / —</h3>
+                        <p class="text-xs text-slate-400 mt-1" id="onlineCountDetail">Verifica in corso...</p>
                     </div>
                     <div class="apple-glass p-6 rounded-3xl">
-                        <span class="text-[10px] font-mono text-pink-400 uppercase tracking-widest font-semibold">HIDS Engine</span>
-                        <h3 class="text-3xl font-bold mt-2 text-white">YAML Active</h3>
-                        <p class="text-xs text-slate-400 mt-1">5 detection rules loaded</p>
+                        <span class="text-[10px] font-mono text-pink-400 uppercase tracking-widest font-semibold">Heimdall (HIDS)</span>
+                        <h3 class="text-3xl font-bold mt-2 text-white" id="hidsEngineStatus">—</h3>
+                        <p class="text-xs text-slate-400 mt-1" id="hidsEngineDetail">Verifica in corso...</p>
                     </div>
                     <div class="apple-glass p-6 rounded-3xl">
-                        <span class="text-[10px] font-mono text-amber-400 uppercase tracking-widest font-semibold">VirusTotal API</span>
-                        <h3 class="text-3xl font-bold mt-2 text-white">Connected</h3>
-                        <p class="text-xs text-slate-400 mt-1">Hash verification enabled</p>
+                        <span class="text-[10px] font-mono text-amber-400 uppercase tracking-widest font-semibold">VirusTotal (Mjolnir)</span>
+                        <h3 class="text-3xl font-bold mt-2 text-white" id="vtStatus">—</h3>
+                        <p class="text-xs text-slate-400 mt-1" id="vtStatusDetail">Apri "Configurazione" per impostarla</p>
                     </div>
                     <div class="apple-glass p-6 rounded-3xl">
-                        <span class="text-[10px] font-mono text-purple-400 uppercase tracking-widest font-semibold">SOAR Pipelines</span>
-                        <h3 class="text-3xl font-bold mt-2 text-white" id="totalExecs">0 Runs</h3>
-                        <p class="text-xs text-slate-400 mt-1">3 playbooks loaded</p>
+                        <span class="text-[10px] font-mono text-purple-400 uppercase tracking-widest font-semibold">Playbook SOAR</span>
+                        <h3 class="text-3xl font-bold mt-2 text-white" id="totalExecs">0 esecuzioni</h3>
+                        <p class="text-xs text-slate-400 mt-1">Sleipnir: 3 playbook disponibili</p>
+                    </div>
+                </div>
+
+                <div class="apple-glass p-8 rounded-3xl shadow-2xl">
+                    <div class="flex justify-between items-center mb-4">
+                        <div>
+                            <h2 class="text-lg font-bold text-white">Stato dei moduli</h2>
+                            <p class="text-xs text-slate-400">Cosa succede davvero, spiegato in una frase — nessun numero inventato.</p>
+                        </div>
+                        <button onclick="refreshHealth()" class="px-4 py-2 bg-[#1c1c1e] hover:bg-[#2c2c2e] text-[10px] font-mono text-slate-300 rounded-full transition">🔄 Aggiorna</button>
+                    </div>
+                    <div id="moduleStatusList" class="space-y-2">
+                        <p class="text-xs text-slate-500 font-mono">Verifica dei moduli in corso...</p>
                     </div>
                 </div>
 
@@ -418,6 +434,71 @@
                 </div>
             </div>
 
+            <!-- SETUP WIZARD -->
+            <div id="panel-setup" class="space-y-6 max-w-4xl mx-auto hidden">
+                <div class="apple-glass p-8 rounded-3xl shadow-2xl">
+                    <div class="mb-6">
+                        <span class="text-[10px] font-mono text-emerald-400 uppercase tracking-widest font-semibold">Configurazione Guidata</span>
+                        <h2 class="text-2xl font-bold text-white mt-1">Chiavi e Integrazioni</h2>
+                        <p class="text-slate-400 text-sm mt-2">Queste chiavi vengono salvate una sola volta e usate automaticamente ogni volta che Ragnarök esegue un modulo — non serve modificare file di configurazione a mano.</p>
+                    </div>
+
+                    <div id="setupAuthWarning" class="hidden bg-amber-950/30 border border-amber-700/40 rounded-2xl p-4 mb-6 text-xs text-amber-300">
+                        Imposta prima la <b>Chiave API Backend di Ragnarök</b> in <button onclick="openSettings()" class="underline">⚙️ LLM &amp; Settings</button> — serve per salvare la configurazione in modo sicuro.
+                    </div>
+
+                    <form id="setupForm" class="space-y-5 hidden">
+                        <div class="border-t border-[#1d1d1f] pt-5">
+                            <h3 class="text-sm font-semibold text-white mb-1">🔨 Verifica hash sospetti (Mjolnir)</h3>
+                            <p class="text-xs text-slate-500 mb-3">Chiave gratuita su <a href="https://www.virustotal.com/gui/join-us" target="_blank" class="accent-text underline">virustotal.com</a>. Senza questa chiave, Mjolnir raccoglie comunque i processi ma non verifica gli hash sospetti online.</p>
+                            <input type="password" id="setup-virustotal_api_key" data-field="virustotal_api_key" placeholder="Chiave API VirusTotal" class="w-full bg-black border border-[#1d1d1f] rounded-full px-5 py-3 text-xs text-slate-200 font-mono focus:outline-none focus:border-blue-500">
+                            <p class="text-[10px] text-slate-500 mt-1.5" id="status-virustotal_api_key">—</p>
+                        </div>
+
+                        <div class="border-t border-[#1d1d1f] pt-5">
+                            <h3 class="text-sm font-semibold text-white mb-1">🐺 Feed di minacce aggiuntivo (Fenrir)</h3>
+                            <p class="text-xs text-slate-500 mb-3">Facoltativo. Chiave gratuita su <a href="https://otx.alienvault.com" target="_blank" class="accent-text underline">otx.alienvault.com</a>. Fenrir funziona comunque con il solo catalogo CISA KEV, sempre attivo senza chiave.</p>
+                            <input type="password" id="setup-otx_api_key" data-field="otx_api_key" placeholder="Chiave API AlienVault OTX" class="w-full bg-black border border-[#1d1d1f] rounded-full px-5 py-3 text-xs text-slate-200 font-mono focus:outline-none focus:border-blue-500">
+                            <p class="text-[10px] text-slate-500 mt-1.5" id="status-otx_api_key">—</p>
+                        </div>
+
+                        <div class="border-t border-[#1d1d1f] pt-5">
+                            <h3 class="text-sm font-semibold text-white mb-1">✈️ Notifiche su Telegram (Heimdall)</h3>
+                            <p class="text-xs text-slate-500 mb-3">Crea un bot con <a href="https://t.me/BotFather" target="_blank" class="accent-text underline">@BotFather</a> per il token, e usa <a href="https://t.me/userinfobot" target="_blank" class="accent-text underline">@userinfobot</a> per il tuo Chat ID.</p>
+                            <div class="grid grid-cols-2 gap-3">
+                                <div>
+                                    <input type="password" id="setup-telegram_bot_token" data-field="telegram_bot_token" placeholder="Token del Bot" class="w-full bg-black border border-[#1d1d1f] rounded-full px-5 py-3 text-xs text-slate-200 font-mono focus:outline-none focus:border-blue-500">
+                                    <p class="text-[10px] text-slate-500 mt-1.5" id="status-telegram_bot_token">—</p>
+                                </div>
+                                <div>
+                                    <input type="text" id="setup-telegram_chat_id" data-field="telegram_chat_id" placeholder="Chat ID" class="w-full bg-black border border-[#1d1d1f] rounded-full px-5 py-3 text-xs text-slate-200 font-mono focus:outline-none focus:border-blue-500">
+                                    <p class="text-[10px] text-slate-500 mt-1.5" id="status-telegram_chat_id">—</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="border-t border-[#1d1d1f] pt-5">
+                            <h3 class="text-sm font-semibold text-white mb-1">📯 Hub di notifiche centralizzato (Gjallarhorn)</h3>
+                            <p class="text-xs text-slate-500 mb-3">Facoltativo. Se hai un'istanza di <a href="https://github.com/Fioru12/Gjallarhorn" target="_blank" class="accent-text underline">Gjallarhorn</a> attiva, Heimdall e Sleipnir instraderanno lì i loro alert invece che via Telegram diretto.</p>
+                            <div class="grid grid-cols-2 gap-3">
+                                <div>
+                                    <input type="text" id="setup-gjallarhorn_hub_url" data-field="gjallarhorn_hub_url" placeholder="http://127.0.0.1:8090" class="w-full bg-black border border-[#1d1d1f] rounded-full px-5 py-3 text-xs text-slate-200 font-mono focus:outline-none focus:border-blue-500">
+                                    <p class="text-[10px] text-slate-500 mt-1.5" id="status-gjallarhorn_hub_url">—</p>
+                                </div>
+                                <div>
+                                    <input type="password" id="setup-gjallarhorn_api_key" data-field="gjallarhorn_api_key" placeholder="Chiave API Gjallarhorn" class="w-full bg-black border border-[#1d1d1f] rounded-full px-5 py-3 text-xs text-slate-200 font-mono focus:outline-none focus:border-blue-500">
+                                    <p class="text-[10px] text-slate-500 mt-1.5" id="status-gjallarhorn_api_key">—</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="flex justify-end pt-2">
+                            <button type="submit" class="px-6 py-3 bg-emerald-600 hover:bg-emerald-500 font-semibold text-xs rounded-full transition text-white shadow-lg">💾 Salva Configurazione</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
         </div>
     </main>
 
@@ -474,7 +555,7 @@
         const API_OLLAMA = API_BASE + "/api/v1/ollama/status";
         const WS_URL = "ws://127.0.0.1:8080/ws/telemetry";
 
-        const tabMap = ['overview', 'heimdall', 'mjolnir', 'bifrost', 'inventory', 'yggdrasil', 'fenrir', 'hunt', 'sleipnir', 'reports', 'ai'];
+        const tabMap = ['overview', 'heimdall', 'mjolnir', 'bifrost', 'inventory', 'yggdrasil', 'fenrir', 'hunt', 'sleipnir', 'reports', 'ai', 'setup'];
         let chatHistory = [];
         let telemetryData = new Array(45).fill(0).map(() => Math.floor(Math.random() * 40) + 10);
         let totalExecs = 0;
@@ -489,6 +570,8 @@
             setInterval(refreshHealth, 30000);
             connectWebSocket();
             detectOllama();
+            const setupForm = document.getElementById('setupForm');
+            if (setupForm) setupForm.addEventListener('submit', submitSetupForm);
         });
 
         let ws = null;
@@ -584,24 +667,59 @@
             document.getElementById('llmIndicator').textContent = `AI Provider: ${provider.toUpperCase()}`;
         }
 
+        // Turns a raw health_status/health_error into one honest Italian
+        // sentence — no invented counters, no "Connected" that isn't checked.
+        function describeModuleHealth(info) {
+            if (info.health_status === 'healthy') return 'Attivo e funzionante.';
+            if (info.health_status === 'degraded') {
+                const err = (info.health_error || 'motivo sconosciuto').split('\n')[0];
+                return `Non risponde correttamente: ${err}`;
+            }
+            return 'Stato non ancora verificato.';
+        }
+
         async function refreshHealth() {
             try {
                 const res = await fetch(API_STATUS);
                 const data = await res.json();
                 const mods = data.modules || {};
                 let online = 0;
+                const listEl = document.getElementById('moduleStatusList');
+                if (listEl) listEl.innerHTML = '';
                 for (const [key, info] of Object.entries(mods)) {
                     const dot = document.getElementById('health-' + key);
                     if (dot) {
                         dot.className = 'health-dot ' + (info.healthy ? 'health-ok' : 'health-fail');
                     }
                     if (info.healthy) online++;
+
+                    if (listEl) {
+                        const row = document.createElement('div');
+                        row.className = 'flex items-center justify-between px-4 py-2.5 bg-black/40 border border-[#1d1d1f] rounded-2xl text-xs';
+                        row.innerHTML = `
+                            <span class="flex items-center space-x-3">
+                                <span class="health-dot ${info.healthy ? 'health-ok' : 'health-fail'}"></span>
+                                <span class="text-white font-medium">${info.name || key}</span>
+                            </span>
+                            <span class="text-slate-400 font-mono text-[11px] text-right">${describeModuleHealth(info)}</span>
+                        `;
+                        listEl.appendChild(row);
+                    }
                 }
-                document.getElementById('onlineCount').textContent = `${online} / ${data.total_count || 6}`;
-                document.getElementById('llmIndicator').textContent = `${online}/${data.total_count || 6} Systems Online`;
+                document.getElementById('onlineCount').textContent = `${online} / ${data.total_count || 0}`;
+                document.getElementById('onlineCountDetail').textContent =
+                    online === data.total_count ? 'Tutti i moduli rispondono correttamente' : `${data.total_count - online} modulo/i da controllare`;
+                document.getElementById('llmIndicator').textContent = `${online}/${data.total_count || 0} Systems Online`;
+
+                const heimdall = mods.heimdall;
+                if (heimdall) {
+                    document.getElementById('hidsEngineStatus').textContent = heimdall.healthy ? 'Attivo' : 'Non attivo';
+                    document.getElementById('hidsEngineDetail').textContent = describeModuleHealth(heimdall);
+                }
+
                 if (data.executions) {
                     totalExecs = Object.values(data.executions).reduce((a, b) => a + b, 0);
-                    document.getElementById('totalExecs').textContent = totalExecs + ' Runs';
+                    document.getElementById('totalExecs').textContent = totalExecs + ' esecuzioni';
                     if (totalExecs > 0) {
                         const ec = document.getElementById('execCounter');
                         ec.textContent = totalExecs + ' executions';
@@ -611,6 +729,34 @@
             } catch (e) {
                 document.getElementById('llmIndicator').textContent = 'Backend Offline';
                 document.getElementById('llmIndicator').parentElement.className = 'px-3.5 py-1.5 bg-[#1c1c1e] rounded-full flex items-center text-red-400 shadow-sm border border-white/5';
+            }
+            refreshVtCard();
+        }
+
+        // The VirusTotal card reflects whether Mjolnir has a real key configured
+        // (via /api/v1/setup) instead of a hardcoded "Connected" label. This
+        // endpoint requires the Ragnarök API key, so it's a soft best-effort
+        // call: if the key isn't set yet, the card just says so.
+        async function refreshVtCard() {
+            const key = localStorage.getItem('asgard_ragnarok_key') || '';
+            const el = document.getElementById('vtStatus');
+            const detailEl = document.getElementById('vtStatusDetail');
+            if (!el) return;
+            if (!key) {
+                el.textContent = '—';
+                detailEl.textContent = 'Imposta la chiave API nelle Impostazioni per vedere lo stato';
+                return;
+            }
+            try {
+                const res = await fetch(`${API_BASE}/api/v1/setup`, { headers: ragnarokAuthHeaders() });
+                if (!res.ok) throw new Error('unauthorized');
+                const data = await res.json();
+                const configured = data.fields?.virustotal_api_key?.configured;
+                el.textContent = configured ? 'Configurata' : 'Non configurata';
+                detailEl.textContent = configured ? 'Verifica hash sospetti abilitata' : 'Apri "Configurazione" per impostarla';
+            } catch (e) {
+                el.textContent = '—';
+                detailEl.textContent = 'Chiave API non valida: aggiornala nelle Impostazioni';
             }
         }
 
@@ -671,6 +817,7 @@
             if (activeNav) activeNav.className = "w-full flex items-center justify-between px-3.5 py-2.5 rounded-full transition bg-white/10 text-white font-semibold";
             document.getElementById('pageTitle').textContent = tab === 'overview' ? 'Overview Dashboard' : (tab.toUpperCase() + ' WORKSPACE');
             if (tab === 'reports') loadReports();
+            if (tab === 'setup') loadSetupPanel();
         }
 
         async function runModule(moduleName, actionName) {
@@ -915,6 +1062,79 @@
         function ragnarokAuthHeaders() {
             const key = localStorage.getItem('asgard_ragnarok_key') || '';
             return key ? { "X-API-Key": key } : {};
+        }
+
+        const SETUP_FIELD_IDS = [
+            'virustotal_api_key', 'otx_api_key',
+            'telegram_bot_token', 'telegram_chat_id',
+            'gjallarhorn_hub_url', 'gjallarhorn_api_key',
+        ];
+
+        async function loadSetupPanel() {
+            const key = localStorage.getItem('asgard_ragnarok_key') || '';
+            const warning = document.getElementById('setupAuthWarning');
+            const form = document.getElementById('setupForm');
+            if (!key) {
+                warning.classList.remove('hidden');
+                form.classList.add('hidden');
+                return;
+            }
+            try {
+                const res = await fetch(`${API_BASE}/api/v1/setup`, { headers: ragnarokAuthHeaders() });
+                if (!res.ok) throw new Error('unauthorized');
+                const data = await res.json();
+                warning.classList.add('hidden');
+                form.classList.remove('hidden');
+                for (const field of SETUP_FIELD_IDS) {
+                    const info = data.fields[field];
+                    const statusEl = document.getElementById('status-' + field);
+                    const inputEl = document.getElementById('setup-' + field);
+                    if (!info || !statusEl || !inputEl) continue;
+                    inputEl.value = '';
+                    if (info.configured) {
+                        statusEl.textContent = `✓ Configurata (${info.preview})`;
+                        statusEl.className = 'text-[10px] text-emerald-400 mt-1.5';
+                        inputEl.placeholder = 'Lascia vuoto per mantenere il valore attuale';
+                    } else {
+                        statusEl.textContent = 'Non ancora configurata';
+                        statusEl.className = 'text-[10px] text-slate-500 mt-1.5';
+                    }
+                }
+            } catch (e) {
+                warning.classList.remove('hidden');
+                warning.textContent = 'La chiave API salvata non è valida. Aggiornala in ⚙️ LLM & Settings.';
+                form.classList.add('hidden');
+            }
+        }
+
+        async function submitSetupForm(e) {
+            e.preventDefault();
+            const values = {};
+            for (const field of SETUP_FIELD_IDS) {
+                const inputEl = document.getElementById('setup-' + field);
+                // Only send fields the user actually typed into - an empty
+                // field means "leave unchanged", not "clear this value".
+                if (inputEl && inputEl.value.trim()) {
+                    values[field] = inputEl.value.trim();
+                }
+            }
+            if (Object.keys(values).length === 0) {
+                showToast('Nessun campo da salvare.', 'error');
+                return;
+            }
+            try {
+                const res = await fetch(`${API_BASE}/api/v1/setup`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', ...ragnarokAuthHeaders() },
+                    body: JSON.stringify({ values }),
+                });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                showToast('Configurazione salvata con successo!', 'success');
+                loadSetupPanel();
+                refreshVtCard();
+            } catch (err) {
+                showToast('Salvataggio non riuscito: ' + err, 'error');
+            }
         }
 
         function escapeHtml(string) {

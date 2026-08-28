@@ -20,6 +20,12 @@ _AUDIT_DB_FD, _AUDIT_DB_PATH = tempfile.mkstemp(prefix="ragnarok_audit_test_", s
 os.close(_AUDIT_DB_FD)
 os.environ.setdefault("RAGNAROK_AUDIT_DB_PATH", _AUDIT_DB_PATH)
 
+# Same for the setup wizard's persisted env file: never touch a real one.
+_SETUP_ENV_FD, _SETUP_ENV_PATH = tempfile.mkstemp(prefix="ragnarok_setup_test_", suffix=".env")
+os.close(_SETUP_ENV_FD)
+os.remove(_SETUP_ENV_PATH)  # start absent, as a fresh install would be
+os.environ.setdefault("RAGNAROK_SETUP_ENV_PATH", _SETUP_ENV_PATH)
+
 BACKEND_DIR = os.path.join(os.path.dirname(__file__), "..", "backend")
 sys.path.insert(0, os.path.abspath(BACKEND_DIR))
 
@@ -269,3 +275,76 @@ def test_chat_without_module_keyword_does_not_require_confirmation():
     )
     assert res.status_code == 200
     assert res.json()["status"] == "success"
+
+
+# --- 5. Setup wizard ---
+
+def test_setup_requires_auth():
+    res = client.get("/api/v1/setup")
+    assert res.status_code == 401
+    res = client.post("/api/v1/setup", json={"values": {"virustotal_api_key": "x"}})
+    assert res.status_code == 401
+
+
+def test_setup_rejects_unknown_field():
+    res = client.post(
+        "/api/v1/setup",
+        json={"values": {"totally_made_up_field": "x"}},
+        headers=AUTH_HEADERS,
+    )
+    assert res.status_code == 422
+
+
+def test_setup_save_and_status_roundtrip(monkeypatch):
+    for meta in server.SETUP_FIELDS.values():
+        monkeypatch.delenv(meta["env"], raising=False)
+
+    res = client.post(
+        "/api/v1/setup",
+        json={"values": {"virustotal_api_key": "abcd1234efgh5678"}},
+        headers=AUTH_HEADERS,
+    )
+    assert res.status_code == 200
+    assert "VT_API_KEY" in res.json()["updated_fields"]
+    # The subprocess env for the next module launch picks this up immediately.
+    assert os.environ["VT_API_KEY"] == "abcd1234efgh5678"
+
+    res = client.get("/api/v1/setup", headers=AUTH_HEADERS)
+    assert res.status_code == 200
+    fields = res.json()["fields"]
+    assert fields["virustotal_api_key"]["configured"] is True
+    # The raw secret must never be echoed back, only a masked preview.
+    assert fields["virustotal_api_key"]["preview"] == "************5678"
+    assert "abcd1234efgh5678" not in res.text
+    assert fields["otx_api_key"]["configured"] is False
+
+
+def test_setup_persists_across_reload(monkeypatch):
+    for meta in server.SETUP_FIELDS.values():
+        monkeypatch.delenv(meta["env"], raising=False)
+
+    client.post(
+        "/api/v1/setup",
+        json={"values": {"telegram_bot_token": "tok123", "telegram_chat_id": "chat456"}},
+        headers=AUTH_HEADERS,
+    )
+    assert os.path.isfile(server.SETUP_ENV_PATH)
+
+    # Simulate a fresh process start: clear env, then re-run the loader that
+    # server.py calls at import time.
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+    server._load_setup_env(server.SETUP_ENV_PATH)
+    assert os.environ["TELEGRAM_BOT_TOKEN"] == "tok123"
+    assert os.environ["TELEGRAM_CHAT_ID"] == "chat456"
+
+
+def test_setup_empty_value_clears_field(monkeypatch):
+    monkeypatch.setenv("OTX_API_KEY", "will-be-cleared")
+    res = client.post(
+        "/api/v1/setup",
+        json={"values": {"otx_api_key": ""}},
+        headers=AUTH_HEADERS,
+    )
+    assert res.status_code == 200
+    assert "OTX_API_KEY" not in os.environ

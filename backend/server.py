@@ -19,6 +19,38 @@ from typing import Optional, List, Dict, Any
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
+# --- Setup wizard: load previously saved integration keys, if any ---
+# These are the env vars that the modules Ragnarok launches (as subprocesses,
+# which inherit the parent process environment) already know how to read.
+# Loading them here, before anything else, means a value saved by the setup
+# wizard on a previous run is honored on every subsequent start without the
+# user ever having to open a config.yaml or .env file by hand.
+SETUP_ENV_PATH = os.getenv(
+    "RAGNAROK_SETUP_ENV_PATH",
+    os.path.join(os.path.dirname(__file__), "asgard_setup.env"),
+)
+
+
+def _load_setup_env(path: str) -> None:
+    if not os.path.isfile(path):
+        return
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                key = key.strip()
+                value = value.strip()
+                if key and value and key not in os.environ:
+                    os.environ[key] = value
+    except OSError as e:
+        print(f"[RAGNAROK] Could not read setup config at {path}: {e}")
+
+
+_load_setup_env(SETUP_ENV_PATH)
+
 app = FastAPI(title="Asgard Enterprise SOC Orchestrator", version="6.0.0")
 
 # CORS: restricted to the local origins the Ragnarok desktop shell is expected
@@ -66,6 +98,80 @@ def require_api_key(x_api_key: Optional[str] = Header(default=None)):
     if not x_api_key or x_api_key != RAGNAROK_API_KEY:
         raise HTTPException(status_code=401, detail="Missing or invalid X-API-Key header")
     return x_api_key
+
+
+# --- Setup wizard fields ---
+# Maps a friendly field name (used in the wizard UI and API payload) to the
+# environment variable each downstream module actually reads. Every entry
+# here corresponds to an env var a module genuinely consults today - this
+# list is deliberately not padded with fields nothing reads yet.
+SETUP_FIELDS: Dict[str, Dict[str, str]] = {
+    "virustotal_api_key": {"env": "VT_API_KEY", "label": "Chiave API VirusTotal", "used_by": "Mjolnir"},
+    "otx_api_key": {"env": "OTX_API_KEY", "label": "Chiave API AlienVault OTX", "used_by": "Fenrir"},
+    "telegram_bot_token": {"env": "TELEGRAM_BOT_TOKEN", "label": "Token Bot Telegram", "used_by": "Heimdall"},
+    "telegram_chat_id": {"env": "TELEGRAM_CHAT_ID", "label": "Chat ID Telegram", "used_by": "Heimdall"},
+    "gjallarhorn_hub_url": {"env": "GJALLARHORN_HUB_URL", "label": "URL Hub Gjallarhorn", "used_by": "Heimdall, Sleipnir"},
+    "gjallarhorn_api_key": {"env": "GJALLARHORN_API_KEY", "label": "Chiave API Gjallarhorn", "used_by": "Heimdall, Sleipnir"},
+}
+
+
+class SetupRequest(BaseModel):
+    values: Dict[str, str]
+
+
+def _mask(value: str) -> str:
+    if len(value) <= 4:
+        return "*" * len(value)
+    return "*" * (len(value) - 4) + value[-4:]
+
+
+@app.get("/api/v1/setup")
+def get_setup_status(_api_key: str = Depends(require_api_key)):
+    """Reports which integrations are configured, without ever returning the
+    actual secret values back to the frontend."""
+    fields = {}
+    for field, meta in SETUP_FIELDS.items():
+        raw = os.environ.get(meta["env"], "")
+        fields[field] = {
+            "label": meta["label"],
+            "used_by": meta["used_by"],
+            "configured": bool(raw),
+            "preview": _mask(raw) if raw else None,
+        }
+    return {"fields": fields}
+
+
+@app.post("/api/v1/setup")
+def save_setup(req: SetupRequest, _api_key: str = Depends(require_api_key)):
+    """Persists integration keys as env vars for this process (so the next
+    module Ragnarok launches immediately picks them up) and writes them to
+    a local file so they survive a restart. Unknown field names are ignored
+    rather than silently accepted, so a typo in the frontend fails loudly."""
+    unknown = [f for f in req.values if f not in SETUP_FIELDS]
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"Unknown setup field(s): {', '.join(unknown)}")
+
+    updated = []
+    for field, value in req.values.items():
+        env_name = SETUP_FIELDS[field]["env"]
+        value = value.strip()
+        if not value:
+            os.environ.pop(env_name, None)
+        else:
+            os.environ[env_name] = value
+        updated.append(env_name)
+
+    try:
+        with open(SETUP_ENV_PATH, "w", encoding="utf-8") as f:
+            f.write("# Written by the Ragnarok setup wizard. Do not commit this file.\n")
+            for field, meta in SETUP_FIELDS.items():
+                current = os.environ.get(meta["env"], "")
+                if current:
+                    f.write(f"{meta['env']}={current}\n")
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Saved in memory but failed to persist to disk: {e}")
+
+    return {"status": "saved", "updated_fields": updated}
 
 # Auto-detect ASGARD_ROOT relative to backend directory or fallback to environment variable
 DEFAULT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))

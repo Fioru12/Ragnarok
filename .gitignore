@@ -4,6 +4,7 @@ __pycache__/
 reports/
 .venv/
 *.egg-info/
+backend/asgard_setup.env
 
 # Node / Tauri CLI
 node_modules/
