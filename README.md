@@ -185,6 +185,7 @@ Ragnarök now supports **multi-user authentication with role-based access contro
 - **Bearer tokens** are obtained via `POST /api/v1/auth/login` and sent as `Authorization: Bearer <token>`.
 - **API key** (`X-API-Key`) still works on all protected endpoints for non-interactive scripts. When a Bearer token is present, it takes precedence.
 - A **default admin** is created on first startup (random password printed to console).
+- **Brute-force protection**: after 5 failed attempts (configurable) the account is locked for 5 minutes (configurable). The counter resets on a successful login and decays after the lockout window. Locked logins return HTTP 429 with a `retry_after_seconds` hint.
 
 ### Configuration
 
@@ -193,6 +194,8 @@ Ragnarök now supports **multi-user authentication with role-based access contro
 | `RAGNAROK_AUTH_DB_PATH` | `backend/ragnarok_auth.db` | Path to the auth database |
 | `RAGNAROK_AUTH_SECRET` | auto-generated (printed once) | Secret for signing session tokens — **set this in production** to persist sessions across restarts |
 | `RAGNAROK_SESSION_TTL` | `28800` (8h) | Session lifetime in seconds |
+| `RAGNAROK_LOGIN_MAX_ATTEMPTS` | `5` | Failed login attempts before account lockout |
+| `RAGNAROK_LOCKOUT_SECONDS` | `300` (5m) | Lockout duration after too many failures |
 
 ### API Endpoints
 

@@ -1593,3 +1593,67 @@ def test_auth_setup_claim_rejected_once_claimed(fresh_auth_db):
     assert client.get("/api/v1/auth/setup").json()["bootstrap_available"] is False
 
 
+
+# ----------------------------------------------------------------------
+# Login brute-force lockout tests (isolated auth DB + small thresholds)
+# ----------------------------------------------------------------------
+
+import time as _time
+
+
+@pytest.fixture()
+def lockout_policy(monkeypatch):
+    """Small lockout thresholds so tests don't hammer the login endpoint."""
+    import auth as auth_module
+    monkeypatch.setattr(auth_module, "LOGIN_MAX_ATTEMPTS", 3)
+    monkeypatch.setattr(auth_module, "LOGIN_LOCKOUT_SECONDS", 60)
+
+
+def test_login_lockout_after_max_attempts(fresh_auth_db, lockout_policy):
+    """After MAX_ATTEMPTS failures, login returns 429 even with the right password."""
+    _auth_mod.create_user("lo_user", "lo_pass_123", "viewer")
+    for _ in range(3):
+        res = client.post("/api/v1/auth/login", json={"username": "lo_user", "password": "wrong"})
+        assert res.status_code == 401
+    # 4th attempt: locked (even with the correct password)
+    res = client.post("/api/v1/auth/login", json={"username": "lo_user", "password": "lo_pass_123"})
+    assert res.status_code == 429
+    assert res.json()["detail"]["error"] == "account_locked"
+    assert res.json()["detail"]["retry_after_seconds"] > 0
+
+
+def test_login_lockout_resets_on_success(fresh_auth_db, lockout_policy):
+    """Successful login clears the failed counter: 2 fails + 1 success = not locked."""
+    _auth_mod.create_user("ok_user", "ok_pass_123", "viewer")
+    client.post("/api/v1/auth/login", json={"username": "ok_user", "password": "nope1"})
+    client.post("/api/v1/auth/login", json={"username": "ok_user", "password": "nope2"})
+    res = client.post("/api/v1/auth/login", json={"username": "ok_user", "password": "ok_pass_123"})
+    assert res.status_code == 200
+    # Counter cleared: a couple more failures must NOT lock (threshold is 3 fresh)
+    client.post("/api/v1/auth/login", json={"username": "ok_user", "password": "nope3"})
+    res = client.post("/api/v1/auth/login", json={"username": "ok_user", "password": "ok_pass_123"})
+    assert res.status_code == 200
+
+
+def test_lockout_expires_after_window(fresh_auth_db, lockout_policy):
+    """Once the lockout window passes, the account is usable again."""
+    import auth as auth_module
+    _auth_mod.create_user("exp_user", "exp_pass_123", "viewer")
+    for _ in range(3):
+        client.post("/api/v1/auth/login", json={"username": "exp_user", "password": "wrong"})
+    assert client.post(
+        "/api/v1/auth/login", json={"username": "exp_user", "password": "exp_pass_123"}
+    ).status_code == 429
+
+    # Simulate the window passing by rewinding last_fail/locked_until in the DB
+    conn = auth_module._connect()
+    conn.execute(
+        "UPDATE failed_logins SET last_fail = ?, locked_until = ? WHERE username = ?",
+        (_time.time() - 120, _time.time() - 60, "exp_user"),
+    )
+    conn.commit()
+    conn.close()
+
+    res = client.post("/api/v1/auth/login", json={"username": "exp_user", "password": "exp_pass_123"})
+    assert res.status_code == 200
+

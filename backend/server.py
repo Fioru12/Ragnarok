@@ -21,6 +21,9 @@ from auth import (
     require_auth,
     require_role,
     check_user,
+    check_login_allowed,
+    record_failed_login,
+    clear_failed_logins,
     create_session,
     destroy_session,
     update_last_login,
@@ -163,10 +166,26 @@ class SetRoleRequest(BaseModel):
 
 @app.post("/api/v1/auth/login")
 async def auth_login(req: LoginRequest):
-    """Authenticate and return a Bearer session token."""
+    """Authenticate and return a Bearer session token.
+
+    Brute-force protection: after LOGIN_MAX_ATTEMPTS failed attempts the
+    account is locked for LOGIN_LOCKOUT_SECONDS (HTTP 429 with retry_after).
+    """
+    lock = check_login_allowed(req.username)
+    if not lock["allowed"]:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "error": "account_locked",
+                "message": "Too many failed login attempts. Try again later.",
+                "retry_after_seconds": lock["retry_after"],
+            },
+        )
     user = check_user(req.username, req.password)
     if not user:
+        record_failed_login(req.username)
         raise HTTPException(status_code=401, detail="Invalid credentials")
+    clear_failed_logins(req.username)
     update_last_login(user["id"])
     token = create_session(user["id"])
     return {"token": token, "user": {"id": user["id"], "username": user["username"], "role": user["role"]}}

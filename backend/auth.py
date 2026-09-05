@@ -69,6 +69,13 @@ def init_auth_db() -> None:
                 is_active INTEGER NOT NULL DEFAULT 1
             );
 
+            CREATE TABLE IF NOT EXISTS failed_logins (
+                username TEXT PRIMARY KEY,
+                fail_count INTEGER NOT NULL DEFAULT 0,
+                last_fail REAL NOT NULL,
+                locked_until REAL NOT NULL DEFAULT 0
+            );
+
             CREATE TABLE IF NOT EXISTS sessions (
                 token_hash TEXT PRIMARY KEY,
                 user_id INTEGER NOT NULL,
@@ -151,6 +158,82 @@ def update_last_login(user_id: int) -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Brute-force protection (failed-login lockout)
+# ---------------------------------------------------------------------------
+
+LOGIN_MAX_ATTEMPTS = int(os.environ.get("RAGNAROK_LOGIN_MAX_ATTEMPTS", "5"))
+LOGIN_LOCKOUT_SECONDS = int(os.environ.get("RAGNAROK_LOCKOUT_SECONDS", str(5 * 60)))
+
+
+def check_login_allowed(username: str) -> Dict[str, Any]:
+    """
+    Return {'allowed': bool, 'retry_after': int} for a username.
+    A lockout expires when locked_until passes; the fail counter also resets
+    if the last failure is older than the lockout window (idle decay).
+    """
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "SELECT fail_count, last_fail, locked_until FROM failed_logins WHERE username = ?",
+            (username,),
+        ).fetchone()
+    finally:
+        conn.close()
+    now = time.time()
+    if not row:
+        return {"allowed": True, "retry_after": 0}
+    if row["locked_until"] > now:
+        return {"allowed": False, "retry_after": int(row["locked_until"] - now) + 1}
+    # Counter decay: older than the lockout window → start fresh
+    if now - row["last_fail"] > LOGIN_LOCKOUT_SECONDS:
+        _clear_failed_logins(username)
+    return {"allowed": True, "retry_after": 0}
+
+
+def record_failed_login(username: str) -> int:
+    """Count a failed attempt; lock the account when the threshold is hit."""
+    conn = _connect()
+    try:
+        now = time.time()
+        row = conn.execute(
+            "SELECT fail_count, last_fail FROM failed_logins WHERE username = ?",
+            (username,),
+        ).fetchone()
+        prev_count = 0
+        if row and (now - row["last_fail"]) <= LOGIN_LOCKOUT_SECONDS:
+            prev_count = row["fail_count"]
+        fail_count = prev_count + 1
+        locked_until = (now + LOGIN_LOCKOUT_SECONDS) if fail_count >= LOGIN_MAX_ATTEMPTS else 0
+        conn.execute(
+            """INSERT INTO failed_logins (username, fail_count, last_fail, locked_until)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(username) DO UPDATE SET
+                   fail_count = excluded.fail_count,
+                   last_fail = excluded.last_fail,
+                   locked_until = excluded.locked_until""",
+            (username, fail_count, now, locked_until),
+        )
+        conn.commit()
+        return fail_count
+    finally:
+        conn.close()
+
+
+def _clear_failed_logins(username: str) -> None:
+    conn = _connect()
+    try:
+        conn.execute("DELETE FROM failed_logins WHERE username = ?", (username,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def clear_failed_logins(username: str) -> None:
+    """Reset the failed-attempt counter (call after a successful login)."""
+    _clear_failed_logins(username)
 
 # ---------------------------------------------------------------------------
 # Session tokens (HMAC-signed, stdlib only)
