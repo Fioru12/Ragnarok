@@ -1,0 +1,333 @@
+"""User authentication and role-based access control for Ragnarok.
+
+Stores users and sessions in a local SQLite database (same pattern as the
+existing audit DB). No external dependencies -- password hashing and session
+tokens use the standard library only.
+
+Roles (least privilege):
+    admin   -- full access: execute modules, manage users, re-index, everything
+    analyst -- read/query/export/notify (no module execution, no index management)
+    viewer  -- read/query/export only (no execute, no index, no notify)
+
+Backward compatibility: the X-API-Key header (RAGNAROK_API_KEY) still works on
+all protected endpoints for non-interactive scripts. When a Bearer session
+token is present, it takes precedence and the API key is ignored.
+"""
+
+import hashlib
+import hmac
+import json
+import os
+import secrets
+import sqlite3
+import time
+import base64
+from typing import Optional, Dict, Any, List
+
+from fastapi import Header, HTTPException, status
+
+# ---------------------------------------------------------------------------
+# Database setup
+# ---------------------------------------------------------------------------
+
+AUTH_DB_PATH = os.getenv(
+    "RAGNAROK_AUTH_DB_PATH",
+    os.path.join(os.path.dirname(__file__), "ragnarok_auth.db"),
+)
+
+# Secret used to sign session tokens. Auto-generated if not set (printed once).
+_AUTH_SECRET = os.environ.get("RAGNAROK_AUTH_SECRET")
+if not _AUTH_SECRET:
+    _AUTH_SECRET = secrets.token_urlsafe(48)
+    print("=" * 70)
+    print("[RAGNAROK] RAGNAROK_AUTH_SECRET not set -- generated a temporary secret.")
+    print("[RAGNAROK] Set it in your environment to persist sessions across restarts.")
+    print("=" * 70)
+
+SESSION_TTL = int(os.environ.get("RAGNAROK_SESSION_TTL", str(8 * 3600)))  # 8h default
+
+
+def _connect() -> sqlite3.Connection:
+    conn = sqlite3.connect(AUTH_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_auth_db() -> None:
+    """Create users + sessions tables and a default admin if empty."""
+    conn = _connect()
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'viewer',
+                created_at REAL NOT NULL,
+                last_login REAL,
+                is_active INTEGER NOT NULL DEFAULT 1
+            );
+
+            CREATE TABLE IF NOT EXISTS sessions (
+                token_hash TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                created_at REAL NOT NULL,
+                expires_at REAL NOT NULL,
+                is_valid INTEGER NOT NULL DEFAULT 1,
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+            CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
+            """
+        )
+        conn.commit()
+        # Default admin if no users exist
+        row = conn.execute("SELECT COUNT(*) FROM users").fetchone()
+        if row[0] == 0:
+            pw = secrets.token_urlsafe(12)
+            pw_hash = _hash_password(pw)
+            conn.execute(
+                "INSERT INTO users (username, password_hash, role, created_at) VALUES (?, ?, ?, ?)",
+                ("admin", pw_hash, "admin", time.time()),
+            )
+            conn.commit()
+            print("=" * 70)
+            print("[RAGNAROK] No users found -- created default admin account:")
+            print(f"[RAGNAROK]   username: admin")
+            print(f"[RAGNAROK]   password: {pw}")
+            print("[RAGNAROK] Change this password after first login!")
+            print("=" * 70)
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Password hashing (PBKDF2-SHA256, stdlib only)
+# ---------------------------------------------------------------------------
+
+_HASH_ITERATIONS = 260_000
+
+
+def _hash_password(password: str) -> str:
+    """Return 'salt:hexhash' for storage."""
+    salt = secrets.token_hex(16)
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), _HASH_ITERATIONS)
+    return f"{salt}:{dk.hex()}"
+
+
+def _verify_password(password: str, stored: str) -> bool:
+    """Constant-time check of password against a 'salt:hexhash' string."""
+    try:
+        salt, hexhash = stored.split(":", 1)
+    except ValueError:
+        return False
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), _HASH_ITERATIONS)
+    return hmac.compare_digest(dk.hex(), hexhash)
+
+
+def check_user(username: str, password: str) -> Optional[Dict[str, Any]]:
+    """Return user dict if credentials are valid, else None."""
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "SELECT id, username, password_hash, role, is_active FROM users WHERE username = ?",
+            (username,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row or not row["is_active"]:
+        return None
+    if not _verify_password(password, row["password_hash"]):
+        return None
+    return {"id": row["id"], "username": row["username"], "role": row["role"]}
+
+
+def update_last_login(user_id: int) -> None:
+    conn = _connect()
+    try:
+        conn.execute("UPDATE users SET last_login = ? WHERE id = ?", (time.time(), user_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+# ---------------------------------------------------------------------------
+# Session tokens (HMAC-signed, stdlib only)
+# ---------------------------------------------------------------------------
+
+
+def _sign(payload: bytes) -> str:
+    sig = hmac.new(_AUTH_SECRET.encode(), payload, hashlib.sha256).digest()
+    return (
+        base64.urlsafe_b64encode(payload).decode().rstrip("=")
+        + "."
+        + base64.urlsafe_b64encode(sig).decode().rstrip("=")
+    )
+
+
+def _verify_token(token: str) -> Optional[Dict[str, Any]]:
+    try:
+        parts = token.split(".", 1)
+        if len(parts) != 2:
+            return None
+        payload_b64 = parts[0]
+        payload_b64 += "=" * (-len(payload_b64) % 4)
+        payload = base64.urlsafe_b64decode(payload_b64)
+        expected = _sign(payload)
+        if not hmac.compare_digest(token, expected):
+            return None
+        return json.loads(payload)
+    except Exception:
+        return None
+
+
+def create_session(user_id: int) -> str:
+    payload = json.dumps({"uid": user_id, "sid": secrets.token_hex(16)}).encode()
+    token = _sign(payload)
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    now = time.time()
+    conn = _connect()
+    try:
+        conn.execute(
+            "INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+            (token_hash, user_id, now, now + SESSION_TTL),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return token
+
+
+def validate_session(token: str) -> Optional[Dict[str, Any]]:
+    data = _verify_token(token)
+    if not data:
+        return None
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "SELECT s.user_id, s.expires_at, s.is_valid, u.username, u.role, u.is_active "
+            "FROM sessions s JOIN users u ON u.id = s.user_id "
+            "WHERE s.token_hash = ?",
+            (token_hash,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row or not row["is_valid"] or not row["is_active"]:
+        return None
+    if row["expires_at"] < time.time():
+        return None
+    return {"id": row["user_id"], "username": row["username"], "role": row["role"]}
+
+
+def destroy_session(token: str) -> None:
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    conn = _connect()
+    try:
+        conn.execute("UPDATE sessions SET is_valid = 0 WHERE token_hash = ?", (token_hash,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_users() -> List[Dict[str, Any]]:
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            "SELECT id, username, role, created_at, last_login, is_active FROM users ORDER BY id"
+        ).fetchall()
+    finally:
+        conn.close()
+    return [dict(r) for r in rows]
+
+
+def create_user(username: str, password: str, role: str = "viewer") -> Optional[int]:
+    if role not in ("admin", "analyst", "viewer"):
+        return None
+    conn = _connect()
+    try:
+        cur = conn.execute(
+            "INSERT INTO users (username, password_hash, role, created_at) VALUES (?, ?, ?, ?)",
+            (username, _hash_password(password), role, time.time()),
+        )
+        conn.commit()
+        return cur.lastrowid
+    except sqlite3.IntegrityError:
+        return None
+    finally:
+        conn.close()
+
+
+def set_user_role(user_id: int, role: str) -> bool:
+    if role not in ("admin", "analyst", "viewer"):
+        return False
+    conn = _connect()
+    try:
+        cur = conn.execute("UPDATE users SET role = ? WHERE id = ?", (role, user_id))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def deactivate_user(user_id: int) -> bool:
+    conn = _connect()
+    try:
+        cur = conn.execute("UPDATE users SET is_active = 0 WHERE id = ?", (user_id,))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+# ---------------------------------------------------------------------------
+# FastAPI dependencies
+# ---------------------------------------------------------------------------
+
+# API key still accepted for scripts (backward compat)
+RAGNAROK_API_KEY = os.getenv("RAGNAROK_API_KEY", "")
+
+
+def require_role(*allowed_roles: str):
+    """FastAPI dependency enforcing Bearer session token OR X-API-Key.
+
+    Usage:
+        @app.get("/foo")
+        async def foo(user: dict = Depends(require_role("admin", "analyst"))):
+            ...
+    """
+    allowed = set(allowed_roles)
+
+    async def _checker(
+        authorization: Optional[str] = Header(default=None),
+        x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    ):
+        # 1. Try Bearer session token first
+        if authorization and authorization.lower().startswith("bearer "):
+            token = authorization[7:].strip()
+            user = validate_session(token)
+            if user and user["role"] in allowed:
+                return user
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired session",
+            )
+        # 2. Fallback: API key (admin-level only, for scripts)
+        if x_api_key and x_api_key == RAGNAROK_API_KEY and "admin" in allowed:
+            return {"id": 0, "username": "api-key", "role": "admin"}
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing or invalid credentials",
+        )
+
+    return _checker
+
+
+# Convenience: any authenticated user (regardless of role)
+require_auth = require_role("admin", "analyst", "viewer")
+
+
+# Initialize the auth database on module import (creates tables + default admin)
+init_auth_db()
+
+

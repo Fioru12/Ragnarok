@@ -32,6 +32,13 @@ os.close(_SETUP_ENV_FD)
 os.remove(_SETUP_ENV_PATH)  # start absent, as a fresh install would be
 os.environ.setdefault("RAGNAROK_SETUP_ENV_PATH", _SETUP_ENV_PATH)
 
+# Isolate the auth DB and use a fixed secret for deterministic tests.
+_AUTH_DB_FD, _AUTH_DB_PATH = tempfile.mkstemp(prefix="ragnarok_auth_test_", suffix=".db")
+os.close(_AUTH_DB_FD)
+os.environ.setdefault("RAGNAROK_AUTH_DB_PATH", _AUTH_DB_PATH)
+os.environ.setdefault("RAGNAROK_AUTH_SECRET", "test-secret-do-not-use-in-prod")
+os.environ.setdefault("RAGNAROK_SESSION_TTL", "3600")
+
 BACKEND_DIR = os.path.join(os.path.dirname(__file__), "..", "backend")
 sys.path.insert(0, os.path.abspath(BACKEND_DIR))
 
@@ -1283,3 +1290,194 @@ def test_gdpr_recommend_endpoint_unknown_size_defaults():
     assert res.status_code == 200
     data = res.json()
     assert "heimdall_agent" in data["recommendation"]["recommended_agents"]
+
+
+# ----------------------------------------------------------------------
+# Auth & RBAC tests
+# ----------------------------------------------------------------------
+
+import auth as _auth_mod
+from auth import check_user, create_session, validate_session, destroy_session
+from auth import list_users, create_user, set_user_role, deactivate_user
+
+# Create deterministic test users (default admin has random password)
+_test_users = {
+    "analyst": _auth_mod.create_user("analyst_test", "analyst_pass", "analyst"),
+    "viewer": _auth_mod.create_user("viewer_test", "viewer_pass", "viewer"),
+    "admin": _auth_mod.create_user("admin_test", "admin_pass", "admin"),
+}
+
+
+def _login(username, password):
+    res = client.post("/api/v1/auth/login", json={"username": username, "password": password})
+    assert res.status_code == 200, f"Login failed for {username}: {res.text}"
+    return res.json()["token"]
+
+
+def _auth_headers(token):
+    return {"Authorization": f"Bearer {token}"}
+
+
+def test_login_success():
+    for uname in _test_users:
+        res = client.post("/api/v1/auth/login", json={"username": f"{uname}_test", "password": f"{uname}_pass"})
+        assert res.status_code == 200
+        data = res.json()
+        assert "token" in data
+        assert data["user"]["username"] == f"{uname}_test"
+        assert data["user"]["role"] == uname
+
+
+def test_login_invalid_password():
+    res = client.post("/api/v1/auth/login", json={"username": "analyst_test", "password": "wrong"})
+    assert res.status_code == 401
+
+
+def test_login_unknown_user():
+    res = client.post("/api/v1/auth/login", json={"username": "nobody", "password": "whatever"})
+    assert res.status_code == 401
+
+
+def test_auth_me_with_valid_token():
+    token = _login("analyst_test", "analyst_pass")
+    res = client.get("/api/v1/auth/me", headers=_auth_headers(token))
+    assert res.status_code == 200
+    assert res.json()["user"]["username"] == "analyst_test"
+
+
+def test_auth_me_without_token():
+    res = client.get("/api/v1/auth/me")
+    assert res.status_code == 401
+
+
+def test_auth_me_with_invalid_token():
+    res = client.get("/api/v1/auth/me", headers={"Authorization": "Bearer invalid.token.here"})
+    assert res.status_code == 401
+
+
+def test_logout_invalidates_token():
+    token = _login("viewer_test", "viewer_pass")
+    res = client.post("/api/v1/auth/logout", headers=_auth_headers(token))
+    assert res.status_code == 200
+    res = client.get("/api/v1/auth/me", headers=_auth_headers(token))
+    assert res.status_code == 401
+
+
+def test_rbac_viewer_can_query():
+    """Viewer can access read endpoints like /api/v1/rag/query."""
+    token = _login("viewer_test", "viewer_pass")
+    headers = _auth_headers(token)
+    res = client.post("/api/v1/rag/query", json={"query": "test"}, headers=headers)
+    # RAG may not be available, but auth should pass (not 401)
+    assert res.status_code != 401
+
+
+def test_rbac_viewer_cannot_execute():
+    """Viewer cannot execute modules (admin-only)."""
+    token = _login("viewer_test", "viewer_pass")
+    headers = _auth_headers(token)
+    res = client.post("/api/v1/execute", json={"module": "heimdall", "action": "status"}, headers=headers)
+    assert res.status_code == 401
+
+
+def test_rbac_analyst_cannot_execute():
+    """Analyst cannot execute modules (admin-only)."""
+    token = _login("analyst_test", "analyst_pass")
+    headers = _auth_headers(token)
+    res = client.post("/api/v1/execute", json={"module": "heimdall", "action": "status"}, headers=headers)
+    assert res.status_code == 401
+
+
+def test_rbac_admin_can_execute():
+    """Admin can execute modules (auth passes; module may fail but not 401)."""
+    token = _login("admin_test", "admin_pass")
+    headers = _auth_headers(token)
+    res = client.post("/api/v1/execute", json={"module": "heimdall", "action": "status"}, headers=headers)
+    # Auth should pass — status may be 200 (success/error) but NOT 401
+    assert res.status_code != 401
+
+
+def test_rbac_viewer_cannot_view_audit_log():
+    """Audit log is admin-only."""
+    token = _login("viewer_test", "viewer_pass")
+    headers = _auth_headers(token)
+    res = client.get("/api/v1/audit-log", headers=headers)
+    assert res.status_code == 401
+
+
+def test_rbac_admin_can_view_audit_log():
+    """Admin can view audit log."""
+    token = _login("admin_test", "admin_pass")
+    headers = _auth_headers(token)
+    res = client.get("/api/v1/audit-log", headers=headers)
+    assert res.status_code == 200
+
+
+def test_user_management_requires_admin():
+    """Only admin can list/create users."""
+    # Viewer cannot list users
+    token = _login("viewer_test", "viewer_pass")
+    res = client.get("/api/v1/auth/users", headers=_auth_headers(token))
+    assert res.status_code == 401
+
+    # Analyst cannot create users
+    token = _login("analyst_test", "analyst_pass")
+    res = client.post("/api/v1/auth/users", json={"username": "newbie", "password": "pass123", "role": "viewer"}, headers=_auth_headers(token))
+    assert res.status_code == 401
+
+
+def test_admin_can_create_and_list_users():
+    """Admin can create a user and see it in the list."""
+    token = _login("admin_test", "admin_pass")
+    headers = _auth_headers(token)
+
+    res = client.post("/api/v1/auth/users", json={"username": "new_user", "password": "new_pass", "role": "analyst"}, headers=headers)
+    assert res.status_code == 200
+    assert res.json()["username"] == "new_user"
+
+    res = client.get("/api/v1/auth/users", headers=headers)
+    assert res.status_code == 200
+    usernames = [u["username"] for u in res.json()["users"]]
+    assert "new_user" in usernames
+
+
+def test_admin_can_deactivate_user():
+    """Admin can deactivate a user; deactivated user cannot login."""
+    token = _login("admin_test", "admin_pass")
+    headers = _auth_headers(token)
+
+    # Create a user to deactivate
+    res = client.post("/api/v1/auth/users", json={"username": "to_deactivate", "password": "pass", "role": "viewer"}, headers=headers)
+    uid = res.json()["id"]
+
+    # Deactivate
+    res = client.delete(f"/api/v1/auth/users/{uid}", headers=headers)
+    assert res.status_code == 200
+
+    # Cannot login anymore
+    res = client.post("/api/v1/auth/login", json={"username": "to_deactivate", "password": "pass"})
+    assert res.status_code == 401
+
+
+def test_api_key_still_works_for_admin_endpoints():
+    """Backward compat: X-API-Key still works on admin-only endpoints."""
+    res = client.get("/api/v1/audit-log", headers=AUTH_HEADERS)
+    assert res.status_code == 200
+
+
+def test_create_user_invalid_role():
+    """Creating a user with an invalid role returns 400."""
+    token = _login("admin_test", "admin_pass")
+    headers = _auth_headers(token)
+    res = client.post("/api/v1/auth/users", json={"username": "badrole", "password": "pass", "role": "superadmin"}, headers=headers)
+    assert res.status_code == 400
+
+
+def test_password_hashing_is_safe():
+    """Verify password hashing produces salt:hash format and verifies correctly."""
+    from auth import _hash_password, _verify_password
+    h = _hash_password("mypassword")
+    assert ":" in h
+    assert _verify_password("mypassword", h) is True
+    assert _verify_password("wrongpassword", h) is False
+

@@ -167,6 +167,51 @@ endpoints remain open since they are read-only.
 
 ---
 
+## Authentication & RBAC
+
+Ragnarök now supports **multi-user authentication with role-based access control (RBAC)**, in addition to the legacy `X-API-Key` header for backward compatibility.
+
+### Roles (least privilege)
+
+| Role | Permissions |
+|------|-------------|
+| `admin` | Full access: execute modules, manage users, re-index, view audit log, everything |
+| `analyst` | Read / query / export / notify (no module execution, no index management) |
+| `viewer` | Read / query / export only (no execute, no index, no notify) |
+
+### How it works
+
+- **Sessions** are stored in a local SQLite database (`ragnarok_auth.db`) with hashed passwords and expiring tokens.
+- **Bearer tokens** are obtained via `POST /api/v1/auth/login` and sent as `Authorization: Bearer <token>`.
+- **API key** (`X-API-Key`) still works on all protected endpoints for non-interactive scripts. When a Bearer token is present, it takes precedence.
+- A **default admin** is created on first startup (random password printed to console).
+
+### Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RAGNAROK_AUTH_DB_PATH` | `backend/ragnarok_auth.db` | Path to the auth database |
+| `RAGNAROK_AUTH_SECRET` | auto-generated (printed once) | Secret for signing session tokens — **set this in production** to persist sessions across restarts |
+| `RAGNAROK_SESSION_TTL` | `28800` (8h) | Session lifetime in seconds |
+
+### API Endpoints
+
+| Endpoint | Method | Auth | Description |
+|----------|--------|------|-------------|
+| `/api/v1/auth/login` | POST | — | Authenticate, returns `{token, user}` |
+| `/api/v1/auth/logout` | POST | Bearer | Invalidate current session |
+| `/api/v1/auth/me` | GET | Bearer | Get current user info |
+| `/api/v1/auth/users` | GET | Admin | List all users |
+| `/api/v1/auth/users` | POST | Admin | Create a user (`{username, password, role}`) |
+| `/api/v1/auth/users/{id}` | DELETE | Admin | Deactivate a user |
+| `/api/v1/audit-log` | GET | Admin | View audit trail |
+
+### Audit log
+
+Every authenticated action (login, query, export, execute, user management) is recorded with: user, action, timestamp, success/failure. Query via `GET /api/v1/audit-log` (admin-only).
+
+---
+
 <div align="center">
 
 **Built by [Fioru12](https://github.com/Fioru12)** — The Ultimate Asgard Suite Crown Jewel.

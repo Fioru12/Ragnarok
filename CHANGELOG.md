@@ -2,7 +2,7 @@
 
 Tutti i cambiamenti di questa sessione mirano a trasformare Asgard da toolkit tecnico a **prodotto
 usabile quotidianamente da una PMI**: report pronti, automazione, notifiche, dashboard
-omnicomprensiva, integrazioni.
+omnicomprensiva, integrazioni, autenticazione.
 
 ## Riepilogo aree toccate
 
@@ -13,10 +13,22 @@ omnicomprensiva, integrazioni.
 | Automazione | Solo auto-index e watcher | + scheduler report (2 modalità testate) |
 | Dashboard | KPI/score/timeline | + sezione export, fix chiave API condivisa |
 | Integrazioni (Gjallarhorn) | Telegram, Webhook, SMTP | + Teams, Jira, ServiceNow |
+| Autenticazione | API key singola | Multi-utente + RBAC (admin/analyst/viewer) + audit log |
 
 ---
 
 ## Ragnarök
+
+### Nuovo: autenticazione multi-utente e RBAC
+- `backend/auth.py` (nuovo) — sistema auth completo con SQLite:
+  - 3 ruoli: `admin` (tutto), `analyst` (read/query/export/notify), `viewer` (read/query/export)
+  - Password hashing con salt (SHA-256), sessioni con token Bearer e TTL (default 8h)
+  - Endpoint: `/api/v1/auth/login`, `/logout`, `/me`, `/users` (CRUD admin-only)
+  - Audit log: ogni azione autenticata registrata (utente, azione, timestamp, esito)
+  - **Backward compat**: `X-API-Key` funziona ancora; Bearer token ha precedenza
+  - Default admin creato al primo avvio (password casuale stampata in console)
+- `backend/server.py` — endpoint protetti con `require_role()`; middleware auth compositabile
+- Config: `RAGNAROK_AUTH_DB_PATH`, `RAGNAROK_AUTH_SECRET`, `RAGNAROK_SESSION_TTL`
 
 ### Nuovo: sezione "Report ed Export" nella dashboard
 - `backend/dashboard/index.html` — pulsanti one-click per:
@@ -48,6 +60,7 @@ omnicomprensiva, integrazioni.
 - `backend/requirements-rag.txt` — aggiunto `fpdf2>=2.7`.
 
 ### Documentazione
+- `README.md` — sezione "Authentication & RBAC" con ruoli, endpoint, configurazione, audit log.
 - `backend/rag/README.md` — sezione "Export PDF" + "Invio programmato del report
   (automazione PMI)" + "Report ed Export dalla Dashboard (uso quotidiano PMI)".
 
@@ -75,16 +88,21 @@ omnicomprensiva, integrazioni.
 
 | Suite | Test | Esito |
 |-------|------|-------|
-| Ragnarök `tests/` | 82 | ✅ |
+| Ragnarök `tests/` | 101 | ✅ |
 | Ragnarök `backend/tests/test_rag.py` | 93 | ✅ |
 | Gjallarhorn `tests/` | 50 | ✅ |
-| **Totale** | **225** | ✅ 0 failure |
+| **Totale** | **244** | ✅ 0 failure |
 
 ---
 
 ## Note operative
 - Il rebuild Docker (`docker compose build ragnarok`) va fatto quando Docker è attivo,
   perché l'immagine `asgard-suite:latest` non include le ultime modifiche a
-  `pdf_report.py` / `server.py`.
+  `pdf_report.py` / `server.py` / `auth.py`.
 - I nuovi canali Gjallarhorn sono **non-breaking**: se non configurati, sono no-op.
 - I nuovi scheduler Ragnarök sono **inerti di default** (`RAG_REPORT_SEND_MINUTES=0`).
+- Il sistema auth è **backward compat**: `X-API-Key` funziona ancora. Per abilitare il
+  multi-utente, imposta `RAGNAROK_AUTH_SECRET` e crea utenti via `/api/v1/auth/users`.
+- **Importante**: imposta `RAGNAROK_AUTH_SECRET` in produzione per persistere le sessioni
+  tra i riavvi (altrimenti vengono rigenerate a ogni startup).
+
