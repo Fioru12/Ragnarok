@@ -84,8 +84,18 @@ button.secondary{background:#475569}
     <h4 id="ws-toast-title">Anomalia</h4>
     <p id="ws-toast-body"></p>
 </div>
-<div class="header"><h1>&#128481;&#65039; Asgard RAG Dashboard</h1><span id="ragBadge" class="badge offline">RAG Offline</span></div>
+<div class="header"><h1>&#128481;&#65039; Asgard RAG Dashboard</h1><span id="ragBadge" class="badge offline">RAG Offline</span><span id="userBadge" class="badge" style="display:none;cursor:pointer" onclick="doLogout()" title="Clicca per fare logout"></span></div>
 <div class="container">
+  <div class="section" id="loginSection" style="display:none;border-color:#334155">
+    <h2>&#128274; Accesso</h2>
+    <div class="row" style="flex-wrap:wrap;gap:0.5rem;align-items:center">
+      <input type="text" id="loginUser" placeholder="Username" style="width:auto">
+      <input type="password" id="loginPw" placeholder="Password" style="width:auto">
+      <button onclick="doLogin()">Accedi</button>
+      <span id="loginMsg" style="font-size:0.8125rem"></span>
+    </div>
+  </div>
+
   <!-- Security Score Card -->
   <div class="card" id="scoreCard" style="margin-bottom: 1.5rem;">
     <h3 style="margin:0 0 0.5rem 0; font-size: 1.125rem;">🎯 La Tua Protezione Oggi</h3>
@@ -146,7 +156,7 @@ button.secondary{background:#475569}
   </div>
   <div class="section">
     <h2>&#128194; Indicizzazione</h2>
-    <button onclick="runIndex()">&#128260; Re-indicizza tutto</button>
+    <button class="admin-only" onclick="runIndex()">&#128260; Re-indicizza tutto</button>
     <div id="iLoading" class="loading">In corso...</div>
     <div id="iRes"></div>
   </div>
@@ -171,7 +181,10 @@ button.secondary{background:#475569}
 </div>
 <script>
 var K=localStorage.getItem('rag_key')||localStorage.getItem('asgard_ragnarok_key')||'';
-var H=K?{'X-API-Key':K,'Content-Type':'application/json'}:{'Content-Type':'application/json'};
+var TOKEN=localStorage.getItem('asgard_session_token')||'';
+var MY_ROLE='';
+function _authHdrs(){var h={};if(TOKEN)h['Authorization']='Bearer '+TOKEN;return h}
+var H=(function(){var h={'Content-Type':'application/json'};if(K)h['X-API-Key']=K;var a=_authHdrs();for(var k in a)h[k]=a[k];return h})();
 function g(p){return fetch(p).then(function(r){return r.json()})}
 function po(p,b){return fetch(p,{method:'POST',headers:H,body:JSON.stringify(b||{})}).then(function(r){return r.json()})}
 function esc(s){return String(s==null?'':s).replace(/</g,'&lt;')}
@@ -182,7 +195,55 @@ function expMsg(html){
   clearTimeout(el._t);
   el._t=setTimeout(function(){el.style.display='none'},10000);
 }
-function authed(p,opts){opts=opts||{};opts.headers=opts.headers||{};opts.headers['X-API-Key']=K;return fetch(p,opts)}
+function authed(p,opts){opts=opts||{};opts.headers=opts.headers||{};opts.headers['X-API-Key']=K;var a=_authHdrs();for(var k in a)opts.headers[k]=a[k];return fetch(p,opts)}
+
+// --- Login / logout / ruolo ---
+async function doLogin(){
+  var u=document.getElementById('loginUser').value.trim();
+  var p=document.getElementById('loginPw').value;
+  var msg=document.getElementById('loginMsg');
+  if(!u||!p){msg.innerHTML='<span style="color:#f87171">Inserisci username e password.</span>';return}
+  try{
+    var r=await fetch('/api/v1/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});
+    var d=await r.json();
+    if(r.ok){
+      TOKEN=d.token;localStorage.setItem('asgard_session_token',TOKEN);
+      MY_ROLE=d.user.role;
+      applyRole();
+      msg.innerHTML='<span style="color:#4ade80">Accesso effettuato.</span>';
+    }else{
+      msg.innerHTML='<span style="color:#f87171">'+esc(d.detail||('Errore '+r.status))+'</span>';
+    }
+  }catch(e){msg.innerHTML='<span style="color:#f87171">Errore di rete: '+esc(e)+'</span>'}
+}
+function doLogout(){
+  if(TOKEN){authed('/api/v1/auth/logout',{method:'POST'}).catch(function(){})}
+  TOKEN='';MY_ROLE='';localStorage.removeItem('asgard_session_token');
+  applyRole();
+}
+async function applyRole(){
+  var badge=document.getElementById('userBadge');
+  var section=document.getElementById('loginSection');
+  if(TOKEN){
+    try{
+      var me=await fetch('/api/v1/auth/me',{headers:_authHdrs()}).then(function(r){return r.ok?r.json():null});
+      if(me&&me.user){
+        MY_ROLE=me.user.role;
+        badge.textContent=me.user.username+' ('+MY_ROLE+')';
+        badge.style.display='inline-block';
+        section.style.display='none';
+        document.querySelectorAll('.admin-only').forEach(function(el){el.style.display=MY_ROLE==='admin'?'':'none'});
+        return;
+      }
+    }catch(e){}
+    // token scaduto o invalido
+    TOKEN='';localStorage.removeItem('asgard_session_token');
+  }
+  badge.style.display='none';
+  section.style.display='';
+  document.querySelectorAll('.admin-only').forEach(function(el){el.style.display='none'});
+}
+applyRole();
 function saveBlob(blob,fn){
   var a=document.createElement('a');
   var url=URL.createObjectURL(blob);
