@@ -101,8 +101,21 @@ class SecurityAuditor:
                 "TLS non abilitato",
                 "Le comunicazioni non sono cifrate. Dati sensibili "
                 "viaggiano in chiaro sulla rete.",
-                "Abilita TLS con ASGARD_TLS=true e fornisci certificati validi."
+                "Abilita TLS con ASGARD_TLS=true (auto self-signed) o "
+                "fornisci ASGARD_TLS_CERTFILE/ASGARD_TLS_KEYFILE."
             )
+        else:
+            certfile = os.getenv("ASGARD_TLS_CERTFILE")
+            keyfile = os.getenv("ASGARD_TLS_KEYFILE")
+            if certfile and keyfile:
+                from pathlib import Path
+                if not Path(certfile).exists() or not Path(keyfile).exists():
+                    self._add(
+                        HIGH, "encryption",
+                        "Certificati TLS non trovati",
+                        f"I file configurati non esistono: {certfile}, {keyfile}",
+                        "Verifica i percorsi o rimuovi le variabili per auto-generare un certificato."
+                    )
 
         return []
 

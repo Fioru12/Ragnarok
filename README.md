@@ -219,6 +219,23 @@ Ragnarök now supports **multi-user authentication with role-based access contro
 | `RAGNAROK_SESSION_TTL` | `28800` (8h) | Session lifetime in seconds |
 | `RAGNAROK_LOGIN_MAX_ATTEMPTS` | `5` | Failed login attempts before account lockout |
 | `RAGNAROK_LOCKOUT_SECONDS` | `300` (5m) | Lockout duration after too many failures |
+| `ASGARD_TLS` | `false` | Enable HTTPS (`true` for self-signed cert) |
+| `ASGARD_TLS_CERTFILE` | — | Path to TLS certificate (optional, enables HTTPS) |
+| `ASGARD_TLS_KEYFILE` | — | Path to TLS private key (optional, enables HTTPS) |
+
+### TLS
+
+Ragnarök supports HTTPS for deployments on untrusted networks. Without cert/key paths, `ASGARD_TLS=true` auto-generates a self-signed certificate (dev/test only). In production, provide real certificates (e.g. from Let's Encrypt) via `ASGARD_TLS_CERTFILE` / `ASGARD_TLS_KEYFILE`:
+
+```bash
+# Development: auto self-signed
+ASGARD_TLS=true python server.py
+
+# Production: real certificates
+ASGARD_TLS=true ASGARD_TLS_CERTFILE=/etc/ssl/certs/ragnarok.pem ASGARD_TLS_KEYFILE=/etc/ssl/private/ragnarok.key python server.py
+```
+
+Self-signed certificates are written to `.tls/` (git-ignored). To use the HTTPS endpoint, configure your client with `https://` and either trust the self-signed cert or disable verification (dev only).
 
 ### API Endpoints
 

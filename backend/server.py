@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
+from pathlib import Path
 
 # --- User authentication & RBAC (zero new deps, stdlib only) ---
 from auth import (
@@ -1714,7 +1715,77 @@ async def rag_report_send_middleware(request: Request, call_next):
 
 if __name__ == "__main__":
     import uvicorn
+    import ssl
 
     host = os.environ.get("RAGNAROK_HOST", "127.0.0.1")
     port = int(os.environ.get("RAGNAROK_PORT", "8080"))
-    uvicorn.run(app, host=host, port=port)
+
+    use_tls = os.environ.get("ASGARD_TLS", "false").lower() in ("true", "1", "yes")
+
+    ssl_keyfile = None
+    ssl_certfile = None
+    if use_tls:
+        certfile = os.environ.get("ASGARD_TLS_CERTFILE")
+        keyfile = os.environ.get("ASGARD_TLS_KEYFILE")
+
+        if not certfile or not keyfile:
+            # Self-signed cert for dev/test
+            certfile, keyfile = _generate_self_signed_cert(Path.cwd() / ".tls")
+            print(f"[RAGNAROK] TLS abilitato con certificato self-signed (dev): {certfile}")
+        else:
+            certfile = str(Path(certfile).resolve())
+            keyfile = str(Path(keyfile).resolve())
+            if not Path(certfile).exists() or not Path(keyfile).exists():
+                raise SystemExit(
+                    f"[RAGNAROK] Certificati TLS non trovati: {certfile}, {keyfile}"
+                )
+            print(f"[RAGNAROK] TLS abilitato con certificati: {certfile}")
+
+        ssl_keyfile = keyfile
+        ssl_certfile = certfile
+
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        ssl_keyfile=ssl_keyfile,
+        ssl_certfile=ssl_certfile,
+    )
+
+
+def _generate_self_signed_cert(directory: Path):
+    """Genera un certificato self-signed per dev/test (stdlib + cryptography)."""
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    import datetime as _dt
+
+    directory.mkdir(parents=True, exist_ok=True)
+    key_path = directory / "key.pem"
+    cert_path = directory / "cert.pem"
+
+    if key_path.exists() and cert_path.exists():
+        return str(cert_path), str(key_path)
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(_dt.datetime.utcnow())
+        .not_valid_after(_dt.datetime.utcnow() + _dt.timedelta(days=365))
+        .add_extension(x509.SubjectAlternativeName([x509.DNSName("localhost")]), critical=False)
+        .sign(key, hashes.SHA256())
+    )
+
+    key_path.write_bytes(key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.TraditionalOpenSSL,
+        serialization.NoEncryption(),
+    ))
+    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    return str(cert_path), str(key_path)
