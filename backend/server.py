@@ -16,6 +16,21 @@ from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 
+# --- User authentication & RBAC (zero new deps, stdlib only) ---
+from auth import (
+    require_auth,
+    require_role,
+    check_user,
+    create_session,
+    destroy_session,
+    update_last_login,
+    list_users,
+    create_user,
+    set_user_role,
+    deactivate_user,
+    init_auth_db,
+)
+
 # --- Asgard RAG Engine (Retrieval-Augmented Generation) ---
 RAG_AVAILABLE = False
 rag_retriever = None
@@ -112,25 +127,93 @@ app.add_middleware(
 # AD audits, etc.) require an X-API-Key header matching RAGNAROK_API_KEY.
 # Status/health/report-reading endpoints stay open since they only expose
 # read-only local state.
-RAGNAROK_API_KEY = os.getenv("RAGNAROK_API_KEY")
+RAGNAROK_API_KEY = os.getenv("RAGNAROK_API_KEY", "")
 if not RAGNAROK_API_KEY:
     RAGNAROK_API_KEY = secrets.token_urlsafe(32)
     print("=" * 70)
     print("[RAGNAROK] RAGNAROK_API_KEY not set — generated a temporary key:")
     print(f"[RAGNAROK]   {RAGNAROK_API_KEY}")
     print("[RAGNAROK] Set RAGNAROK_API_KEY in your environment to persist it.")
-    print("[RAGNAROK] Send it back as the 'X-API-Key' header on execute/chat calls.")
     print("=" * 70)
-
-
-def require_api_key(x_api_key: Optional[str] = Header(default=None)):
-    if not x_api_key or x_api_key != RAGNAROK_API_KEY:
-        raise HTTPException(status_code=401, detail="Missing or invalid X-API-Key header")
-    return x_api_key
 
 
 # --- Setup wizard fields ---
 # Maps a friendly field name (used in the wizard UI and API payload) to the
+
+# ======================================================================
+# Auth & User Management Endpoints (RBAC)
+# ======================================================================
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class CreateUserRequest(BaseModel):
+    username: str
+    password: str
+    role: str = "viewer"
+
+
+class SetRoleRequest(BaseModel):
+    role: str
+
+
+@app.post("/api/v1/auth/login")
+async def auth_login(req: LoginRequest):
+    """Authenticate and return a Bearer session token."""
+    user = check_user(req.username, req.password)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    update_last_login(user["id"])
+    token = create_session(user["id"])
+    return {"token": token, "user": {"id": user["id"], "username": user["username"], "role": user["role"]}}
+
+
+@app.post("/api/v1/auth/logout")
+async def auth_logout(authorization: Optional[str] = Header(default=None)):
+    """Invalidate the current session token."""
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization[7:].strip()
+        destroy_session(token)
+    return {"status": "ok"}
+
+
+@app.get("/api/v1/auth/me")
+async def auth_me(user: dict = Depends(require_auth)):
+    """Return the currently authenticated user."""
+    return {"user": user}
+
+
+@app.get("/api/v1/auth/users")
+async def auth_list_users(user: dict = Depends(require_role("admin"))):
+    """List all users (admin only)."""
+    return {"users": list_users()}
+
+
+@app.post("/api/v1/auth/users")
+async def auth_create_user(req: CreateUserRequest, user: dict = Depends(require_role("admin"))):
+    """Create a new user (admin only)."""
+    uid = create_user(req.username, req.password, req.role)
+    if uid is None:
+        raise HTTPException(status_code=400, detail="Username taken or invalid role")
+    return {"id": uid, "username": req.username, "role": req.role}
+
+
+@app.patch("/api/v1/auth/users/{user_id}/role")
+async def auth_set_role(user_id: int, req: SetRoleRequest, user: dict = Depends(require_role("admin"))):
+    """Change a user's role (admin only)."""
+    if not set_user_role(user_id, req.role):
+        raise HTTPException(status_code=404, detail="User not found or invalid role")
+    return {"status": "ok", "user_id": user_id, "role": req.role}
+
+
+@app.delete("/api/v1/auth/users/{user_id}")
+async def auth_deactivate_user(user_id: int, user: dict = Depends(require_role("admin"))):
+    """Deactivate a user (admin only)."""
+    if not deactivate_user(user_id):
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"status": "ok", "user_id": user_id}
 
 # ======================================================================
 # Asgard RAG API Endpoints
@@ -157,7 +240,7 @@ class RAGQueryResponse(BaseModel):
 
 
 @app.post("/api/v1/rag/index", response_model=RAGIndexResponse)
-async def rag_index_data(_api_key: str = Depends(require_api_key)):
+async def rag_index_data(user: dict = Depends(require_role("admin"))):
     """Forza re-indicizzazione di tutti i dati Asgard."""
     if not RAG_AVAILABLE or rag_indexer is None:
         raise HTTPException(503, "RAG Engine non disponibile")
@@ -227,7 +310,7 @@ def _compute_security_score(collections: Dict[str, int]) -> Dict[str, Any]:
 
 
 @app.post("/api/v1/rag/query", response_model=RAGQueryResponse)
-async def rag_query(req: RAGQueryRequest, _api_key: str = Depends(require_api_key)):
+async def rag_query(req: RAGQueryRequest, user: dict = Depends(require_role("admin", "analyst", "viewer"))):
     """Query semantica sui dati Asgard indicizzati."""
     if not RAG_AVAILABLE or rag_retriever is None:
         raise HTTPException(503, "RAG Engine non disponibile")
@@ -295,7 +378,7 @@ def _mask(value: str) -> str:
 
 
 @app.get("/api/v1/setup")
-def get_setup_status(_api_key: str = Depends(require_api_key)):
+def get_setup_status(user: dict = Depends(require_role("admin", "analyst", "viewer"))):
     """Reports which integrations are configured, without ever returning the
     actual secret values back to the frontend."""
     fields = {}
@@ -311,7 +394,7 @@ def get_setup_status(_api_key: str = Depends(require_api_key)):
 
 
 @app.post("/api/v1/setup")
-def save_setup(req: SetupRequest, _api_key: str = Depends(require_api_key)):
+def save_setup(req: SetupRequest, user: dict = Depends(require_role("admin"))):
     """Persists integration keys as env vars for this process (so the next
     module Ragnarok launches immediately picks them up) and writes them to
     a local file so they survive a restart. Unknown field names are ignored
@@ -593,7 +676,7 @@ async def get_status():
 
 
 @app.get("/api/v1/audit-log")
-def get_audit_log(limit: int = 50, offset: int = 0, _api_key: str = Depends(require_api_key)):
+def get_audit_log(limit: int = 50, offset: int = 0, user: dict = Depends(require_role("admin"))):
     limit = max(1, min(limit, 500))
     offset = max(0, offset)
     conn = sqlite3.connect(AUDIT_DB_PATH)
@@ -756,7 +839,7 @@ async def _run_module_raw(mod: str, action: str = "default", target: str = "127.
     return stdout_text or stderr_text
 
 @app.post("/api/v1/execute")
-async def execute_module(req: ActionRequest, _api_key: str = Depends(require_api_key)):
+async def execute_module(req: ActionRequest, user: dict = Depends(require_role("admin"))):
     mod = req.module.lower()
     await telemetry.broadcast({"type": "module_start", "module": mod, "action": req.action, "ts": time.time()})
     try:
@@ -826,7 +909,7 @@ def query_llm(prompt: str, tool_output: str, provider: str, api_key: str, model:
         return f"[AI Analysis Note: LLM request skipped or failed ({e}). Showing raw execution output above.]"
 
 @app.post("/api/v1/chat")
-async def chat_orchestrator(req: ChatRequest, _api_key: str = Depends(require_api_key)):
+async def chat_orchestrator(req: ChatRequest, user: dict = Depends(require_role("admin", "analyst", "viewer"))):
     prompt = req.prompt.lower()
     triggered_module = _detect_chat_module(prompt)
     agent_used = None  # nome dell'agente specializzato usato per il contesto
@@ -1024,7 +1107,7 @@ async def rag_agents_endpoint():
 
 
 @app.post("/api/v1/rag/agents/ask")
-async def rag_agents_ask(req: dict, _api_key: str = Depends(require_api_key)):
+async def rag_agents_ask(req: dict, user: dict = Depends(require_role("admin", "analyst", "viewer"))):
     """Domanda diretta all'agente competente (auth richiesta).
 
     Routing deterministico per keyword + ricerca semantica confinata alla
@@ -1077,7 +1160,7 @@ async def rag_timeline_endpoint(days: int = 30, spike_factor: float = 3.0, min_s
 
 
 @app.get("/api/v1/rag/timeline/export")
-async def rag_timeline_export_endpoint(days: int = 30, _api_key: str = Depends(require_api_key)):
+async def rag_timeline_export_endpoint(days: int = 30, user: dict = Depends(require_role("admin", "analyst", "viewer"))):
     """Export CSV della serie storica (auth: espone il profilo di attacco)."""
     if not RAG_AVAILABLE or rag_insights is None:
         raise HTTPException(status_code=503, detail="RAG Engine non disponibile")
@@ -1104,7 +1187,7 @@ async def rag_timeline_export_endpoint(days: int = 30, _api_key: str = Depends(r
 
 
 @app.post("/api/v1/rag/timeline/notify")
-async def rag_timeline_notify_endpoint(days: int = 30, _api_key: str = Depends(require_api_key)):
+async def rag_timeline_notify_endpoint(days: int = 30, user: dict = Depends(require_role("admin", "analyst"))):
     """Rileva spike anomali e invia l'alert via Gjallarhorn (se configurato)."""
     if not RAG_AVAILABLE or rag_insights is None:
         raise HTTPException(status_code=503, detail="RAG Engine non disponibile")
@@ -1116,7 +1199,7 @@ async def rag_timeline_notify_endpoint(days: int = 30, _api_key: str = Depends(r
 
 
 @app.get("/api/v1/rag/report")
-async def rag_report_endpoint(save: bool = False, _api_key: str = Depends(require_api_key)):
+async def rag_report_endpoint(save: bool = False, user: dict = Depends(require_role("admin", "analyst", "viewer"))):
     """Report proattivo Markdown (richiede auth: contiene IP e IOC)."""
     if not RAG_AVAILABLE or rag_insights is None:
         raise HTTPException(status_code=503, detail="RAG Engine non disponibile")
@@ -1134,7 +1217,7 @@ async def rag_report_endpoint(save: bool = False, _api_key: str = Depends(requir
 
 
 @app.get("/api/v1/rag/report/pdf")
-async def rag_report_pdf_endpoint(_api_key: str = Depends(require_api_key)):
+async def rag_report_pdf_endpoint(user: dict = Depends(require_role("admin", "analyst", "viewer"))):
     """Report proattivo in formato PDF (richiede auth: contiene IP e IOC)."""
     if not RAG_AVAILABLE or rag_insights is None:
         raise HTTPException(status_code=503, detail="RAG Engine non disponibile")
@@ -1178,7 +1261,7 @@ async def rag_security_trend_endpoint(days: int = 30):
 
 
 @app.post("/api/v1/rag/security/record")
-async def rag_security_record_endpoint(_api_key: str = Depends(require_api_key)):
+async def rag_security_record_endpoint(user: dict = Depends(require_role("admin"))):
     """Registra il security score corrente nello storico (richiede auth)."""
     if not RAG_AVAILABLE or rag_security is None:
         raise HTTPException(status_code=503, detail="RAG Engine non disponibile")
@@ -1197,7 +1280,7 @@ async def rag_security_record_endpoint(_api_key: str = Depends(require_api_key))
 
 
 @app.get("/api/v1/rag/security/audit")
-async def rag_security_dashboard_audit(_api_key: str = Depends(require_api_key)):
+async def rag_security_dashboard_audit(user: dict = Depends(require_role("admin", "analyst", "viewer"))):
     """Security audit per dashboard (richiede auth)."""
     try:
         from rag.security import SecurityAuditor
@@ -1208,7 +1291,7 @@ async def rag_security_dashboard_audit(_api_key: str = Depends(require_api_key))
 
 
 @app.get("/api/v1/rag/security/report")
-async def rag_security_dashboard_report(_api_key: str = Depends(require_api_key)):
+async def rag_security_dashboard_report(user: dict = Depends(require_role("admin", "analyst", "viewer"))):
     """Report Markdown del security audit per dashboard (richiede auth)."""
     try:
         from rag.security import SecurityAuditor
@@ -1223,7 +1306,7 @@ async def rag_security_dashboard_report(_api_key: str = Depends(require_api_key)
 
 
 @app.post("/api/v1/rag/report/notify")
-async def rag_report_notify_endpoint(_api_key: str = Depends(require_api_key)):
+async def rag_report_notify_endpoint(user: dict = Depends(require_role("admin", "analyst"))):
     """Invia il digest del report proattivo via Gjallarhorn (auth richiesta).
 
     Se GJALLARHORN_HUB_URL/GJALLARHORN_API_KEY non sono impostate risponde
