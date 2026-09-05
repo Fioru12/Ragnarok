@@ -1,13 +1,13 @@
 <div align="center">
 
-# RAGNARÖK
+# Ragnarök
 
 ### **The Asgard Suite — AI-Powered SOC Orchestrator**
 
 ![Tauri](https://img.shields.io/badge/Tauri-24C8DB?style=for-the-badge&logo=tauri&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-009688?style=for-the-badge&logo=fastapi&logoColor=white)
-![TailwindCSS](https://img.shields.io/badge/Tailwind_CSS-38BDF8?style=for-the-badge&logo=tailwind-css&logoColor=white)
+![RAG](https://img.shields.io/badge/RAG-ChromaDB%20%2B%20FastEmbed-8B5CF6?style=for-the-badge)
 ![License](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)
 
 </div>
@@ -82,6 +82,49 @@ npm run tauri build
 
 You can also open `frontend/index.html` directly in a regular browser
 against a manually-started backend, without Tauri, for quick UI iteration.
+
+---
+
+## RAG Engine — Memoria e Ricerca Semantica
+
+Ragnarök include un **RAG Engine** integrato che dà all'IA una memoria storica reale dei dati prodotti dai moduli Asgard:
+
+- **Indicizza**: alert Heimdall, IOC Fenrir, report triage Mjolnir, scan Bifrost, assessment Forseti
+- **Cerca semanticamente**: query in linguaggio naturale su tutto lo storico
+- **Correla cross-modulo**: lo stesso IP rilevato da più moduli viene trovato insieme
+- **Memoria conversazionale**: le sessioni ricordano il contesto tra le interazioni
+
+### API RAG
+
+| Endpoint | Metodo | Auth | Descrizione |
+|----------|--------|------|-------------|
+| `/api/v1/rag/index` | POST | ✅ | Forza re-indicizzazione |
+| `/api/v1/rag/stats` | GET | — | Statistiche indice |
+| `/api/v1/rag/query` | POST | ✅ | Query semantica |
+| `/api/v1/rag/sessions` | GET | — | Sessioni attive |
+| `/dashboard` | GET | — | Dashboard HTML interattiva |
+
+### Auto-indexing
+
+Imposta `RAG_AUTO_INDEX_MINUTES` (minuti) per indicizzare automaticamente i dati a intervalli regolari. Default: disabilitato.
+
+```bash
+# Windows
+$env:RAG_AUTO_INDEX_MINUTES = "60"   # ogni ora
+python server.py
+
+# Linux/macOS
+export RAG_AUTO_INDEX_MINUTES=60
+python server.py
+```
+
+### Requisiti aggiuntivi
+
+```bash
+pip install chromadb fastembed numpy
+```
+
+Il modello embedding (`BAAI/bge-small-en-v1.5`, ~90MB ONNX) viene scaricato automaticamente al primo utilizzo e cachato in locale — nessuna dipendenza cloud.
 
 ---
 

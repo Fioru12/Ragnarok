@@ -16,6 +16,35 @@ from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 
+# --- Asgard RAG Engine (Retrieval-Augmented Generation) ---
+RAG_AVAILABLE = False
+rag_retriever = None
+rag_memory = None
+rag_indexer = None
+rag_insights = None
+rag_timeline = None
+rag_agents = None
+
+try:
+    from rag.retriever import AsgardRetriever
+    from rag.memory import ConversationMemory
+    from rag.indexer import AsgardIndexer
+    from rag.insights import InsightsEngine
+    from rag.timeline import TimelineEngine
+    from rag.agents import AgentRouter
+    rag_retriever = AsgardRetriever()
+    rag_memory = ConversationMemory()
+    rag_indexer = AsgardIndexer()
+    rag_insights = InsightsEngine()
+    rag_timeline = TimelineEngine()
+    rag_agents = AgentRouter(retriever=rag_retriever)
+    RAG_AVAILABLE = True
+    print("[RAGNAROK] RAG Engine attivo — ChromaDB + FastEmbed + Insights")
+except ImportError as e:
+    print(f"[RAGNAROK] RAG Engine non disponibile (dipendenze mancanti: {e})")
+except Exception as e:
+    print(f"[RAGNAROK] RAG Engine non inizializzato: {e}")
+
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
@@ -102,6 +131,146 @@ def require_api_key(x_api_key: Optional[str] = Header(default=None)):
 
 # --- Setup wizard fields ---
 # Maps a friendly field name (used in the wizard UI and API payload) to the
+
+# ======================================================================
+# Asgard RAG API Endpoints
+# ======================================================================
+
+class RAGIndexResponse(BaseModel):
+    status: str
+    results: Optional[Dict[str, int]] = None
+    error: Optional[str] = None
+
+
+class RAGQueryRequest(BaseModel):
+    query: str
+    n_results: int = 5
+    sources: Optional[List[str]] = None
+    session_id: Optional[str] = None
+
+
+class RAGQueryResponse(BaseModel):
+    status: str
+    context: str
+    results: List[Dict[str, Any]]
+    answer: Optional[str] = None
+
+
+@app.post("/api/v1/rag/index", response_model=RAGIndexResponse)
+async def rag_index_data(_api_key: str = Depends(require_api_key)):
+    """Forza re-indicizzazione di tutti i dati Asgard."""
+    if not RAG_AVAILABLE or rag_indexer is None:
+        raise HTTPException(503, "RAG Engine non disponibile")
+    try:
+        results = rag_indexer.index_all()
+        return RAGIndexResponse(status="success", results=results)
+    except Exception as e:
+        return RAGIndexResponse(status="error", error=str(e))
+
+
+@app.get("/api/v1/rag/stats")
+async def rag_stats():
+    """Statistiche dell'indice RAG + Security Score."""
+    if not RAG_AVAILABLE:
+        return {"available": False, "rag_available": False, "collections": {}}
+    try:
+        stats = rag_indexer.get_stats()
+        score = _compute_security_score(stats)
+        return {
+            "available": True,
+            "rag_available": True,
+            "collections": stats,
+            "security_score": score,
+        }
+    except Exception as e:
+        return {"available": False, "rag_available": False, "error": str(e)}
+
+
+def _compute_security_score(collections: Dict[str, int]) -> Dict[str, Any]:
+    """Score determinaristico 0-10 basato su indicatori oggettivi (nessun LLM)."""
+    alerts = collections.get("heimdall_alerts", 0)
+    ioc = collections.get("fenrir_ioc", 0)
+    triage = collections.get("mjolnir_triage", 0)
+    scans = collections.get("bifrost_scans", 0)
+    compliance = collections.get("forseti_compliance", 0)
+    playbooks = collections.get("sleipnir_playbooks", 0)
+    score = 0
+    score += 2 if alerts > 0 else 0
+    score += 2 if ioc > 0 else 0
+    score += 2 if compliance > 0 else 0
+    score += 2 if scans > 0 else 0
+    score += 1 if playbooks > 0 else 0
+    score += 1 if RAG_AVAILABLE else 0
+    score = min(score, 10)
+    if score >= 8:
+        level = "high"
+        label = "Protezione elevata"
+    elif score >= 5:
+        level = "medium"
+        label = "Protezione media"
+    else:
+        level = "low"
+        label = "Protezione bassa"
+    return {
+        "score": score,
+        "label": label,
+        "level": level,
+        "coverage": {
+            "hids": alerts > 0,
+            "threat_intel": ioc > 0,
+            "compliance": compliance > 0,
+            "scan": scans > 0,
+            "soar": playbooks > 0,
+            "rag": RAG_AVAILABLE,
+        },
+    }
+
+
+@app.post("/api/v1/rag/query", response_model=RAGQueryResponse)
+async def rag_query(req: RAGQueryRequest, _api_key: str = Depends(require_api_key)):
+    """Query semantica sui dati Asgard indicizzati."""
+    if not RAG_AVAILABLE or rag_retriever is None:
+        raise HTTPException(503, "RAG Engine non disponibile")
+
+    try:
+        # Esegui ricerca semantica
+        results = rag_retriever.search(
+            query=req.query,
+            n_results=req.n_results,
+            sources=req.sources,
+        )
+
+        # Formatta contesto per LLM
+        context = rag_retriever.format_for_llm(results)
+
+        # Salva nella memoria conversazionale
+        if req.session_id and rag_memory:
+            rag_memory.add(req.session_id, "user", req.query)
+            rag_memory.add(
+                req.session_id, "system",
+                f"[RAG context: {len(results)} results found]"
+            )
+
+        return RAGQueryResponse(
+            status="success",
+            context=context,
+            results=results,
+        )
+    except Exception as e:
+        raise HTTPException(500, f"RAG query failed: {e}")
+
+
+@app.get("/api/v1/rag/sessions")
+async def rag_sessions():
+    """Lista sessioni conversazionali attive."""
+    if not RAG_AVAILABLE or rag_memory is None:
+        return {"sessions": []}
+    try:
+        sessions = rag_memory.get_all_sessions()
+        return {"sessions": sessions}
+    except Exception as e:
+        return {"sessions": [], "error": str(e)}
+
 # environment variable each downstream module actually reads. Every entry
 # here corresponds to an env var a module genuinely consults today - this
 # list is deliberately not padded with fields nothing reads yet.
@@ -303,6 +472,8 @@ class ChatRequest(BaseModel):
     provider: Optional[str] = "openrouter"
     model: Optional[str] = "openai/gpt-4o-mini"
     confirm: bool = False
+    session_id: Optional[str] = None
+    confirm: bool = False
 
 
 # Keyword -> module routing table shared by the "detect" and "execute" halves
@@ -323,6 +494,11 @@ def _detect_chat_module(prompt_lower: str) -> Optional[str]:
         if any(kw in prompt_lower for kw in keywords):
             return module
     return None
+
+@app.get("/health")
+def health():
+    """Health-check pubblico per orchestratori Docker / Kubernetes."""
+    return {"status": "healthy", "system": "Asgard Ragnarok"}
 
 @app.get("/")
 def serve_frontend():
@@ -653,6 +829,7 @@ def query_llm(prompt: str, tool_output: str, provider: str, api_key: str, model:
 async def chat_orchestrator(req: ChatRequest, _api_key: str = Depends(require_api_key)):
     prompt = req.prompt.lower()
     triggered_module = _detect_chat_module(prompt)
+    agent_used = None  # nome dell'agente specializzato usato per il contesto
 
     # Human-confirmation gate: an AI-identified action that would execute a
     # real module (subprocess launch) is only a *proposal* until the caller
@@ -679,27 +856,640 @@ async def chat_orchestrator(req: ChatRequest, _api_key: str = Depends(require_ap
         }
 
     tool_output = ""
+    rag_context = ""
+    session_id = getattr(req, "session_id", None)
+
     try:
         if triggered_module:
             tool_output = await _run_module_raw(triggered_module)
             EXEC_COUNTER[triggered_module] += 1
         else:
-            tool_output = f"Ragnarök AI Assistant: Processed query '{req.prompt}'. All 6 defense modules are active."
+            # Se non c'è un modulo triggerato, prova una query RAG
+            if RAG_AVAILABLE and rag_retriever and not triggered_module:
+                # Rileva descrizioni di incidenti → suggerisci playbook Sleipnir
+                # (solo proposta: mai esecuzione senza conferma esplicita)
+                _incident_keywords = ("brute force", "bruteforce", "ransomware",
+                                      "lateral movement", "movimento laterale",
+                                      "malware", "attacco", "intrusione",
+                                      "compromissione", "breach", "incidente",
+                                      "password spraying", "crittografia file")
+                if any(kw in req.prompt.lower() for kw in _incident_keywords) and rag_insights:
+                    suggestion = None
+                    try:
+                        suggestion = rag_insights.suggest_playbook(req.prompt)
+                    except Exception:
+                        suggestion = None
+                    if suggestion:
+                        await telemetry.broadcast({
+                            "type": "chat_playbook_suggested",
+                            "playbook": suggestion.get("playbook"),
+                            "ts": time.time(),
+                        })
+                        return {
+                            "status": "playbook_suggested",
+                            "output": (
+                                f"Ho rilevato la descrizione di un possibile incidente. "
+                                f"Playbook Sleipnir suggerito: '{suggestion['playbook']}' "
+                                f"(pertinenza {suggestion['similarity']:.0%}). "
+                                "Rivedi il playbook e conferma l'esecuzione solo dopo "
+                                "verifica umana: questa è una proposta, nessuna azione è stata eseguita."
+                            ),
+                            "suggested_playbook": suggestion,
+                        }
+                # Rileva prompt che chiedono una visione d'insieme / riepilogo
+                agent_used = None
+                _insight_keywords = ("riepilogo", "situazione", "visione d'insieme",
+                                     "panoramica", "cosa sta succedendo", "minacce princi",
+                                     "resoconto", "summary", "overview", "health", "stato generale")
+                if any(kw in req.prompt.lower() for kw in _insight_keywords) and rag_insights:
+                    try:
+                        insight_text = rag_insights.format_for_llm()
+                        rag_context = insight_text
+                        tool_output = "Ho analizzato lo stato complessivo della suite Asgard (analisi proattiva)."
+                    except Exception:
+                        tool_output = f"Ragnarök AI Assistant: Processed query '{req.prompt}'. All 6 defense modules are active."
+                else:
+                    # Routing multi-agente: se il prompt rientra nel dominio
+                    # di un modulo, la ricerca è confinata alla sua collection
+                    agent_used = None
+                    try:
+                        if rag_agents is not None:
+                            agent_answer = rag_agents.answer(req.prompt, n_results=5)
+                            if agent_answer.get("routed"):
+                                agent_used = agent_answer["agent"]["name"]
+                                rag_context = agent_answer["context"]
+                                n_refs = len(agent_answer["references"])
+                                tool_output = (
+                                    f"Agente {agent_used} ({agent_answer['agent']['module']}): "
+                                    f"{n_refs} riferimenti nel dominio."
+                                )
+                    except Exception:
+                        agent_used = None
+                    if agent_used is None:
+                        try:
+                            rag_results = rag_retriever.search(
+                                query=req.prompt, n_results=5
+                            )
+                            rag_context = rag_retriever.format_for_llm(rag_results)
+                            if rag_results:
+                                tool_output = f"Ho trovato {len(rag_results)} riferimenti nei dati storici Asgard."
+                            else:
+                                tool_output = f"Ragnarök AI Assistant: Processed query '{req.prompt}'. All 6 defense modules are active."
+                        except Exception:
+                            tool_output = f"Ragnarök AI Assistant: Processed query '{req.prompt}'. All 6 defense modules are active."
+            else:
+                tool_output = f"Ragnarök AI Assistant: Processed query '{req.prompt}'. All 6 defense modules are active."
 
         if triggered_module:
             await telemetry.broadcast({"type": "chat_module_trigger", "module": triggered_module, "ts": time.time()})
 
-        if req.provider == "ollama" or (req.api_key and len(req.api_key) > 5):
-            final_reply = query_llm(req.prompt, tool_output, req.provider, req.api_key, req.model, req.history)
-        else:
-            final_reply = tool_output
+        # Arricchisci il contesto con memoria conversazionale
+        memory_context = ""
+        if session_id and rag_memory:
+            memory_context = rag_memory.get_summary(session_id)
+            rag_memory.add(session_id, "user", req.prompt)
 
-        return {"status": "success", "output": final_reply}
+        # Costruisci il contesto completo per LLM
+        full_context = tool_output
+        if rag_context:
+            full_context = f"{rag_context}\n\n=== OUTPUT MODULO ===\n{tool_output}"
+        if memory_context:
+            full_context = f"=== MEMORIA CONVERSAZIONALE ===\n{memory_context}\n\n{full_context}"
+
+        if req.provider == "ollama" or (req.api_key and len(req.api_key) > 5):
+            final_reply = query_llm(req.prompt, full_context, req.provider, req.api_key, req.model, req.history)
+        else:
+            final_reply = full_context if rag_context or memory_context else tool_output
+
+        # Salva risposta nella memoria
+        if session_id and rag_memory:
+            rag_memory.add(session_id, "assistant", final_reply)
+
+        return {"status": "success", "output": final_reply, "agent_used": agent_used}
     except subprocess.TimeoutExpired:
         return {"status": "error", "output": "A module timed out during chat orchestration."}
     except Exception as e:
         return {"status": "error", "output": str(e)}
 
+# ======================================================================
+# RAG Dashboard
+# ======================================================================
+
+import pathlib
+_DASHBOARD_DIR = pathlib.Path(__file__).parent / "dashboard"
+_DASHBOARD_DIR.mkdir(exist_ok=True)
+_DASHBOARD_HTML = _DASHBOARD_DIR / "index.html"
+
+if not _DASHBOARD_HTML.exists():
+    _DASHBOARD_HTML.write_text("<!DOCTYPE html><html><head><title>Asgard RAG</title>")
+    _DASHBOARD_HTML.write_text("<style>body{font-family:sans-serif;background:#0f172a;color:#e2e8f0;padding:2rem}</style>")
+    _DASHBOARD_HTML.write_text("</head><body><h1>Asgard RAG Dashboard</h1>")
+    _DASHBOARD_HTML.write_text("<div id='stats'></div>")
+    _DASHBOARD_HTML.write_text("<script>fetch('/api/v1/rag/stats').then(r=>r.json()).then(s=>{")
+    _DASHBOARD_HTML.write_text("document.getElementById('stats').innerHTML='<pre>'+JSON.stringify(s,null,2)+'</pre>'})")
+    _DASHBOARD_HTML.write_text("</script></body></html>")
+
+@app.get("/dashboard")
+async def rag_dashboard():
+    return FileResponse(str(_DASHBOARD_HTML))
+
+
+@app.get("/security")
+async def rag_security_dashboard():
+    """Security Audit Dashboard."""
+    security_html = _DASHBOARD_DIR / "security.html"
+    if not security_html.exists():
+        raise HTTPException(status_code=404, detail="Security dashboard non trovata")
+    return FileResponse(str(security_html))
+
+
+@app.get("/api/v1/rag/insights")
+async def rag_insights_endpoint():
+    """Analisi proattiva dei dati indicizzati (sommaria, read-only)."""
+    if not RAG_AVAILABLE or rag_insights is None:
+        return {"available": False, "error": "RAG Engine non disponibile"}
+    try:
+        summary = rag_insights.summary()
+        return {"available": True, "insights": summary}
+    except Exception as e:
+        return {"available": False, "error": str(e)}
+
+
+@app.get("/api/v1/rag/agents")
+async def rag_agents_endpoint():
+    """Elenco degli agenti specializzati (pubblico, read-only)."""
+    if not RAG_AVAILABLE or rag_agents is None:
+        return {"available": False, "agents": []}
+    return {"available": True, "agents": rag_agents.list_agents()}
+
+
+@app.post("/api/v1/rag/agents/ask")
+async def rag_agents_ask(req: dict, _api_key: str = Depends(require_api_key)):
+    """Domanda diretta all'agente competente (auth richiesta).
+
+    Routing deterministico per keyword + ricerca semantica confinata alla
+    collection di dominio. Nessuna esecuzione di moduli: sola lettura.
+    """
+    if not RAG_AVAILABLE or rag_agents is None:
+        raise HTTPException(status_code=503, detail="RAG Engine non disponibile")
+    prompt = str(req.get("prompt", "")).strip()
+    if not prompt:
+        raise HTTPException(status_code=422, detail="Campo 'prompt' obbligatorio")
+    try:
+        answer = rag_agents.answer(prompt, n_results=int(req.get("n_results", 5)))
+        if not answer.get("routed"):
+            raise HTTPException(
+                status_code=404,
+                detail="Nessun agente competente per questo prompt",
+            )
+        await telemetry.broadcast({
+            "type": "rag_agent_query",
+            "agent": answer["agent"]["name"],
+            "ts": time.time(),
+            "references": len(answer["references"]),
+        })
+        return {"status": "success", **answer}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/v1/rag/timeline")
+async def rag_timeline_endpoint(days: int = 30, spike_factor: float = 3.0, min_spike: int = 3):
+    """Serie storica giornaliera degli alert (read-only, deterministica).
+
+    spike_factor e min_spike permettono di tarare la sensitivity della spike
+    detection; sono limitati a intervalli sicuri per evitare configurazioni
+    insensate (spike_factor 1.5-10, min_spike 1-50).
+    """
+    if not RAG_AVAILABLE or rag_insights is None:
+        return {"available": False, "error": "RAG Engine non disponibile"}
+    spike_factor = min(max(spike_factor, 1.5), 10.0)
+    min_spike = min(max(min_spike, 1), 50)
+    try:
+        from rag.timeline import TimelineEngine
+        timeline = TimelineEngine(engine=rag_insights)
+        return {"available": True, "timeline": timeline.summary(
+            days=days, spike_factor=spike_factor, min_spike=min_spike)}
+    except Exception as e:
+        return {"available": False, "error": str(e)}
+
+
+@app.get("/api/v1/rag/timeline/export")
+async def rag_timeline_export_endpoint(days: int = 30, _api_key: str = Depends(require_api_key)):
+    """Export CSV della serie storica (auth: espone il profilo di attacco)."""
+    if not RAG_AVAILABLE or rag_insights is None:
+        raise HTTPException(status_code=503, detail="RAG Engine non disponibile")
+    try:
+        from rag.timeline import TimelineEngine
+        timeline = TimelineEngine(engine=rag_insights)
+        rows = timeline.daily_counts(days=days)
+        lines = ["date,count,low,medium,high,critical"]
+        for d in rows:
+            s = d["by_severity"]
+            lines.append(f"{d['date']},{d['count']},{s.get('LOW', 0)},{s.get('MEDIUM', 0)},"
+                         f"{s.get('HIGH', 0)},{s.get('CRITICAL', 0)}")
+        csv_text = "\n".join(lines) + "\n"
+        from fastapi import Response
+        return Response(
+            content=csv_text,
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="asgard_timeline_{days}d.csv"'},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/v1/rag/timeline/notify")
+async def rag_timeline_notify_endpoint(days: int = 30, _api_key: str = Depends(require_api_key)):
+    """Rileva spike anomali e invia l'alert via Gjallarhorn (se configurato)."""
+    if not RAG_AVAILABLE or rag_insights is None:
+        raise HTTPException(status_code=503, detail="RAG Engine non disponibile")
+    try:
+        from rag.dispatch import send_timeline_alert
+        return send_timeline_alert(timeline_kwargs={"engine": rag_insights}, days=days)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/v1/rag/report")
+async def rag_report_endpoint(save: bool = False, _api_key: str = Depends(require_api_key)):
+    """Report proattivo Markdown (richiede auth: contiene IP e IOC)."""
+    if not RAG_AVAILABLE or rag_insights is None:
+        raise HTTPException(status_code=503, detail="RAG Engine non disponibile")
+    try:
+        from rag.report import ReportExporter
+        exporter = ReportExporter(engine=rag_insights)
+        markdown = exporter.generate_markdown()
+        result = {"status": "success", "format": "markdown", "report": markdown}
+        if save:
+            path = exporter.save()
+            result["saved_to"] = path
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/v1/rag/report/pdf")
+async def rag_report_pdf_endpoint(_api_key: str = Depends(require_api_key)):
+    """Report proattivo in formato PDF (richiede auth: contiene IP e IOC)."""
+    if not RAG_AVAILABLE or rag_insights is None:
+        raise HTTPException(status_code=503, detail="RAG Engine non disponibile")
+    try:
+        from rag.pdf_report import PDFReportExporter
+        from rag.report import ReportExporter
+        exporter = PDFReportExporter(report_exporter=ReportExporter(engine=rag_insights))
+        data = exporter.generate_pdf()
+        from fastapi.responses import Response
+        return Response(
+            content=data,
+            media_type="application/pdf",
+            headers={"Content-Disposition": 'attachment; filename="asgard_report.pdf"'},
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/v1/rag/security/history")
+async def rag_security_history_endpoint(days: int = 30):
+    """Storico security score (pubblico, read-only)."""
+    if not RAG_AVAILABLE:
+        return {"available": False, "error": "RAG Engine non disponibile"}
+    try:
+        from rag.security_history import SecurityScoreHistory
+        return {"available": True, "history": SecurityScoreHistory().get_summary(days)}
+    except Exception as e:
+        return {"available": False, "error": str(e)}
+
+
+@app.get("/api/v1/rag/security/trend")
+async def rag_security_trend_endpoint(days: int = 30):
+    """Trend security score (pubblico, read-only)."""
+    if not RAG_AVAILABLE:
+        return {"available": False, "error": "RAG Engine non disponibile"}
+    try:
+        from rag.security_history import SecurityScoreHistory
+        return {"available": True, "trend": SecurityScoreHistory().get_trend(days)}
+    except Exception as e:
+        return {"available": False, "error": str(e)}
+
+
+@app.post("/api/v1/rag/security/record")
+async def rag_security_record_endpoint(_api_key: str = Depends(require_api_key)):
+    """Registra il security score corrente nello storico (richiede auth)."""
+    if not RAG_AVAILABLE or rag_security is None:
+        raise HTTPException(status_code=503, detail="RAG Engine non disponibile")
+    try:
+        audit = rag_security.run_audit()
+        from rag.security_history import SecurityScoreHistory
+        result = SecurityScoreHistory().record_score(
+            score=audit["security_score"],
+            level=audit["risk_level"],
+            findings_count=len(audit["findings"]),
+            recommendations_count=len(audit["recommendations"]),
+        )
+        return {"status": "success", "recorded": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/v1/rag/security/audit")
+async def rag_security_dashboard_audit(_api_key: str = Depends(require_api_key)):
+    """Security audit per dashboard (richiede auth)."""
+    try:
+        from rag.security import SecurityAuditor
+        auditor = SecurityAuditor()
+        return {"status": "success", "audit": auditor.run_full_audit()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/v1/rag/security/report")
+async def rag_security_dashboard_report(_api_key: str = Depends(require_api_key)):
+    """Report Markdown del security audit per dashboard (richiede auth)."""
+    try:
+        from rag.security import SecurityAuditor
+        auditor = SecurityAuditor()
+        return {
+            "status": "success",
+            "format": "markdown",
+            "report": auditor.format_report(),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/v1/rag/report/notify")
+async def rag_report_notify_endpoint(_api_key: str = Depends(require_api_key)):
+    """Invia il digest del report proattivo via Gjallarhorn (auth richiesta).
+
+    Se GJALLARHORN_HUB_URL/GJALLARHORN_API_KEY non sono impostate risponde
+    con sent=false, configured=false — nessun errore, nessun tentativo di rete.
+    """
+    if not RAG_AVAILABLE or rag_insights is None:
+        raise HTTPException(status_code=503, detail="RAG Engine non disponibile")
+    try:
+        from rag import dispatch
+        result = dispatch.send_report(engine=rag_insights)
+        return {"status": "success", **result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ======================================================================
+# GDPR Compliance per Agenti + Raccomandazione per PMI
+# ======================================================================
+
+
+@app.get("/api/v1/rag/gdpr/checklist")
+async def gdpr_checklist():
+    """Checklist GDPR per autovalutazione (pubblica, no auth)."""
+    try:
+        from rag.gdpr import GDPR_CHECKLIST
+        return {"status": "success", "checklist": GDPR_CHECKLIST}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/v1/rag/gdpr/evaluate")
+async def gdpr_evaluate(answers: Dict[str, bool]):
+    """Valuta le risposte alla checklist GDPR e restituisce score + gap analysis."""
+    try:
+        from rag.gdpr import GDPRComplianceChecker
+        checker = GDPRComplianceChecker()
+        return {"status": "success", "evaluation": checker.evaluate_checklist(answers)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/v1/rag/gdpr/recommend")
+async def gdpr_recommend(company_size: str = "small", sector: Optional[str] = None,
+                         maturity: Optional[str] = None):
+    """Raccomanda agenti Asgard per PMI in base a dimensione, settore e maturità."""
+    try:
+        from rag.gdpr import GDPRComplianceChecker
+        checker = GDPRComplianceChecker()
+        return {"status": "success", "recommendation": checker.recommend_agents(company_size, sector, maturity)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ======================================================================
+# Auto-indexing schedulato
+# ======================================================================
+
+RAG_AUTO_INDEX_MINUTES = int(os.environ.get("RAG_AUTO_INDEX_MINUTES", "0"))
+_LAST_AUTO_INDEX = {"ts": 0.0, "running": False}
+
+
+def _auto_index_if_due():
+    """Indicizza automaticamente se il timer è scaduto (solo se abilitato)."""
+    if not RAG_AVAILABLE:
+        return
+    if RAG_AUTO_INDEX_MINUTES <= 0:
+        return
+    if _LAST_AUTO_INDEX["running"]:
+        return
+    now = time.time()
+    if now - _LAST_AUTO_INDEX["ts"] < RAG_AUTO_INDEX_MINUTES * 60:
+        return
+    _LAST_AUTO_INDEX["running"] = True
+    try:
+        _LAST_AUTO_INDEX["ts"] = now
+        results = rag_indexer.index_all()
+        total = results.get("total", 0)
+        if total > 0:
+            print(
+                f"[RAGNAROK] Auto-index completato: {total} documenti "
+                f"(Heimdall={results.get('heimdall', 0)}, "
+                f"Fenrir={results.get('fenrir', 0)}, "
+                f"Mjolnir={results.get('mjolnir', 0)}, "
+                f"Bifrost={results.get('bifrost', 0)}, "
+                f"Forseti={results.get('forseti', 0)})"
+            )
+    except Exception as e:
+        print(f"[RAGNAROK] Auto-index fallito: {e}")
+    finally:
+        _LAST_AUTO_INDEX["running"] = False
+
+
+from fastapi import Request
+
+
+@app.middleware("http")
+async def rag_auto_index_middleware(request: Request, call_next):
+    """Middleware che innesca l'auto-indicizzazione periodica."""
+    _auto_index_if_due()
+    return await call_next(request)
+
+
+# ======================================================================
+# Anomaly watcher: spike push via WebSocket in tempo reale
+# ======================================================================
+
+# Intervallo di controllo anomalie in minuti (0 = disabilitato, default 15)
+RAG_ANOMALY_WATCH_MINUTES = int(os.environ.get("RAG_ANOMALY_WATCH_MINUTES", "15"))
+_LAST_ANOMALY_CHECK: Dict[str, Any] = {"ts": 0.0, "running": False}
+# Ultima data per cui un'anomalia è già stata notificata (anti-duplicati)
+_NOTIFIED_ANOMALY_DATES: set = set()
+
+
+def _anomaly_watch_if_due():
+    """Controlla gli spike e li trasmette via WebSocket se scaduto il timer.
+
+    A differenza dell'auto-index non fa lavoro pesante (nessuna indicizzazione):
+    legge solo i metadati ChromaDB già in memoria, quindi può girare anche
+    frequentemente senza impattare le latenze delle richieste.
+    """
+    if not RAG_AVAILABLE or rag_timeline is None:
+        return
+    if RAG_ANOMALY_WATCH_MINUTES <= 0:
+        return
+    if _LAST_ANOMALY_CHECK["running"]:
+        return
+    now = time.time()
+    if now - _LAST_ANOMALY_CHECK["ts"] < RAG_ANOMALY_WATCH_MINUTES * 60:
+        return
+    _LAST_ANOMALY_CHECK["running"] = True
+    try:
+        _LAST_ANOMALY_CHECK["ts"] = now
+        s = rag_timeline.summary(days=30)
+        new_anoms = [
+            a for a in s.get("anomalies", []) + s.get("severity_anomalies", [])
+            if a.get("date") not in _NOTIFIED_ANOMALY_DATES
+        ]
+        if not new_anoms:
+            return
+        for a in new_anoms:
+            _NOTIFIED_ANOMALY_DATES.add(a["date"])
+        import asyncio
+
+        async def _push():
+            await telemetry.broadcast({
+                "type": "rag_anomaly_detected",
+                "ts": time.time(),
+                "anomalies": new_anoms,
+                "trend": s.get("trend"),
+            })
+
+        # broadcast() è async: schedula sul loop del server senza bloccare
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_push())
+        except RuntimeError:
+            pass  # nessun loop attivo (es. test sincroni): salta il push
+    except Exception as e:
+        print(f"[RAGNAROK] Anomaly watcher fallito: {e}")
+    finally:
+        _LAST_ANOMALY_CHECK["running"] = False
+
+
+@app.middleware("http")
+async def rag_anomaly_watch_middleware(request: Request, call_next):
+    """Middleware che controlla gli spike e li pusha via WebSocket."""
+    _anomaly_watch_if_due()
+    return await call_next(request)
+
+
+# ======================================================================
+# Report sender schedulato: invio periodico del digest proattivo
+# ======================================================================
+#
+# Per una PMI il report non va generato solo quando qualcuno se lo ricorda:
+# con un trigger abilitato il digest del report proattivo viene inviato
+# automaticamente via Gjallarhorn (Telegram/webhook/SMTP), usando lo stesso
+# meccanismo middleware dei task schedulati esistenti.
+#
+# Due modalità (opzionali, non mutualmente esclusive):
+#   RAG_REPORT_SEND_MINUTES=1440    # ogni N minuti (default 0 = disabilitato)
+#   RAG_REPORT_SEND_CRON=08:00      # ogni giorno all'ora fissa locale HH:MM
+#
+# Se Gjallarhorn non è configurato il task è un no-op (nessun errore, nessun
+# tentativo di rete): send_report() non lancia mai eccezioni.
+
+RAG_REPORT_SEND_MINUTES = int(os.environ.get("RAG_REPORT_SEND_MINUTES", "0"))
+RAG_REPORT_SEND_CRON = os.environ.get("RAG_REPORT_SEND_CRON", "").strip()
+_LAST_REPORT_SEND: Dict[str, Any] = {"ts": 0.0, "running": False}
+# Giorno (YYYY-MM-DD) in cui il report giornaliero (CRON) è già stato inviato.
+_LAST_REPORT_CRON_DAY = ""
+
+
+def _report_send_cron_parsed():
+    """Ritorna (hh, mm) se RAG_REPORT_SEND_CRON è valido, altrimenti None."""
+    if not RAG_REPORT_SEND_CRON:
+        return None
+    try:
+        hh, mm = RAG_REPORT_SEND_CRON.split(":", 1)
+        hh, mm = int(hh), int(mm)
+    except (ValueError, AttributeError):
+        return None
+    if not (0 <= hh <= 23 and 0 <= mm <= 59):
+        return None
+    return hh, mm
+
+
+def _report_send_cron_due(now):
+    """True se l'orario del cron è raggiunto oggi e non è già stato inviato."""
+    parsed = _report_send_cron_parsed()
+    if parsed is None:
+        return False
+    lt = time.localtime(now)
+    today = time.strftime("%Y-%m-%d", lt)
+    if _LAST_REPORT_CRON_DAY == today:
+        return False  # già inviato oggi
+    target_min = parsed[0] * 60 + parsed[1]
+    cur_min = lt.tm_hour * 60 + lt.tm_min
+    return cur_min >= target_min
+
+
+def _report_send_if_due():
+    """Invia il digest del report proattivo se un trigger è scaduto."""
+    if not RAG_AVAILABLE or rag_insights is None:
+        return
+    if RAG_REPORT_SEND_MINUTES <= 0 and _report_send_cron_parsed() is None:
+        return
+    if _LAST_REPORT_SEND["running"]:
+        return
+    now = time.time()
+    interval_due = (
+        RAG_REPORT_SEND_MINUTES > 0
+        and now - _LAST_REPORT_SEND["ts"] >= RAG_REPORT_SEND_MINUTES * 60
+    )
+    cron_due = _report_send_cron_due(now)
+    if not (interval_due or cron_due):
+        return
+    _LAST_REPORT_SEND["running"] = True
+    try:
+        _LAST_REPORT_SEND["ts"] = now
+        if cron_due:
+            # segna il giorno come già inviato così il cron non rispedisce oggi
+            _LAST_REPORT_CRON_DAY = time.strftime("%Y-%m-%d", time.localtime(now))
+        from rag import dispatch
+        result = dispatch.send_report(engine=rag_insights)
+        sent = result.get("sent", False)
+        conf = result.get("configured", False)
+        print(
+            f"[RAGNAROK] Report programmato trasmesso: sent={sent} "
+            f"configured={conf}"
+        )
+    except Exception as e:
+        print(f"[RAGNAROK] Report programmato fallito: {e}")
+    finally:
+        _LAST_REPORT_SEND["running"] = False
+
+
+@app.middleware("http")
+async def rag_report_send_middleware(request: Request, call_next):
+    """Middleware che innesca l'invio periodico del report proattivo."""
+    _report_send_if_due()
+    return await call_next(request)
+
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8080)
+
+    host = os.environ.get("RAGNAROK_HOST", "127.0.0.1")
+    port = int(os.environ.get("RAGNAROK_PORT", "8080"))
+    uvicorn.run(app, host=host, port=port)

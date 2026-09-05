@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Asgard — Security Audit Dashboard</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0d1117; color: #c9d1d9; padding: 20px; }
+        .header { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; }
+        .header h1 { font-size: 1.5em; color: #58a6ff; }
+        .header .back { margin-left: auto; color: #8b949e; text-decoration: none; font-size: 0.9em; }
+        .header .back:hover { color: #58a6ff; }
+        .score-card { background: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 32px; text-align: center; margin-bottom: 24px; }
+        .score-value { font-size: 4em; font-weight: bold; margin: 12px 0; }
+        .score-grade { font-size: 1.5em; color: #8b949e; }
+        .severity-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 24px; }
+        .sev-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; text-align: center; }
+        .sev-count { font-size: 2em; font-weight: bold; }
+        .sev-label { font-size: 0.85em; color: #8b949e; margin-top: 4px; }
+        .CRITICAL { color: #f85149; }
+        .HIGH { color: #d29922; }
+        .MEDIUM { color: #e3b341; }
+        .LOW { color: #58a6ff; }
+        .INFO { color: #8b949e; }
+        .findings { display: flex; flex-direction: column; gap: 12px; }
+        .finding { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
+        .finding-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+        .finding-sev { font-weight: bold; padding: 2px 8px; border-radius: 4px; font-size: 0.8em; }
+        .finding-sev.CRITICAL { background: #f8514933; border: 1px solid #f85149; }
+        .finding-sev.HIGH { background: #d2992233; border: 1px solid #d29922; }
+        .finding-sev.MEDIUM { background: #e3b34133; border: 1px solid #e3b341; }
+        .finding-sev.LOW { background: #58a6ff33; border: 1px solid #58a6ff; }
+        .finding-sev.INFO { background: #8b949e33; border: 1px solid #8b949e; }
+        .finding-title { font-weight: 600; }
+        .finding-cat { color: #8b949e; font-size: 0.85em; margin-bottom: 8px; }
+        .finding-desc, .finding-rec { font-size: 0.9em; line-height: 1.5; margin-bottom: 8px; }
+        .finding-rec { color: #58a6ff; }
+        .btn { background: #238636; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-size: 0.9em; }
+        .btn:hover { background: #2ea043; }
+        .btn-secondary { background: #21262d; border: 1px solid #30363d; }
+        .btn-secondary:hover { background: #30363d; }
+        .actions { display: flex; gap: 12px; margin-bottom: 24px; }
+        .timestamp { color: #8b949e; font-size: 0.85em; margin-bottom: 24px; }
+        .empty { text-align: center; color: #8b949e; padding: 40px; }
+        #loading { text-align: center; padding: 40px; color: #8b949e; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🔒 Security Audit</h1>
+        <a href="/dashboard" class="back">← Torna alla Dashboard</a>
+    </div>
+
+    <div class="actions">
+        <button class="btn" onclick="loadAudit()">🔄 Esegui Audit</button>
+        <button class="btn btn-secondary" onclick="exportReport()">📄 Esporta Report</button>
+    </div>
+
+    <div id="loading">Clicca "Esegui Audit" per iniziare...</div>
+    <div id="results" style="display: none;">
+        <div class="score-card">
+            <div class="score-grade" id="scoreGrade">-</div>
+            <div class="score-value" id="scoreValue">-</div>
+            <div class="timestamp" id="scoreTimestamp">-</div>
+        </div>
+
+        <div class="severity-grid" id="severityGrid"></div>
+
+        <h2 style="margin-bottom: 16px; color: #58a6ff;">Findings Dettagliati</h2>
+        <div class="findings" id="findingsList"></div>
+    </div>
+
+    <script>
+        const SEV_COLORS = { CRITICAL: '#f85149', HIGH: '#d29922', MEDIUM: '#e3b341', LOW: '#58a6ff', INFO: '#8b949e' };
+
+        async function loadAudit() {
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('results').style.display = 'none';
+
+            try {
+                const res = await fetch('/api/v1/rag/security/audit', { headers: { 'X-API-Key': await getKey() } });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    renderAudit(data.audit);
+                } else {
+                    document.getElementById('loading').textContent = 'Errore: ' + (data.detail || 'sconosciuto');
+                }
+            } catch (e) {
+                document.getElementById('loading').textContent = 'Errore di connessione: ' + e.message;
+            }
+        }
+
+        function renderAudit(audit) {
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('results').style.display = 'block';
+
+            const scoreEl = document.getElementById('scoreValue');
+            scoreEl.textContent = audit.score + '/100';
+            scoreEl.style.color = audit.score >= 80 ? '#3fb950' : audit.score >= 60 ? '#e3b341' : '#f85149';
+            document.getElementById('scoreGrade').textContent = 'Grade: ' + audit.grade;
+            document.getElementById('scoreTimestamp').textContent = 'Ultimo audit: ' + new Date(audit.timestamp).toLocaleString('it-IT');
+
+            const grid = document.getElementById('severityGrid');
+            grid.innerHTML = '';
+            for (const sev of ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO']) {
+                const count = audit.by_severity[sev] || 0;
+                grid.innerHTML += '<div class="sev-card"><div class="sev-count ' + sev + '">' + count + '</div><div class="sev-label">' + sev + '</div></div>';
+            }
+
+            const list = document.getElementById('findingsList');
+            list.innerHTML = '';
+            if (audit.findings.length === 0) {
+                list.innerHTML = '<div class="empty">✅ Nessun finding di sicurezza rilevato!</div>';
+            } else {
+                audit.findings.forEach(function(f) {
+                    list.innerHTML += '<div class="finding"><div class="finding-header"><span class="finding-sev ' + f.severity + '">' + f.severity + '</span><span class="finding-title">' + esc(f.title) + '</span></div><div class="finding-cat">' + esc(f.category) + '</div><div class="finding-desc">' + esc(f.description) + '</div><div class="finding-rec">💡 ' + esc(f.recommendation) + '</div></div>';
+                });
+            }
+        }
+
+        async function exportReport() {
+            try {
+                const res = await fetch('/api/v1/rag/security/report', { headers: { 'X-API-Key': await getKey() } });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    const blob = new Blob([data.report], { type: 'text/markdown' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'asgard_security_audit.md';
+                    a.click();
+                    URL.revokeObjectURL(url);
+                }
+            } catch (e) {
+                alert('Errore: ' + e.message);
+            }
+        }
+
+        async function getKey() {
+            return localStorage.getItem('asgard_api_key') || '';
+        }
+
+        function esc(s) {
+            var d = document.createElement('div');
+            d.textContent = s;
+            return d.innerHTML;
+        }
+    </script>
+</body>
+</html>

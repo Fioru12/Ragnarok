@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Asgard RAG Dashboard</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh}
+.header{background:linear-gradient(135deg,#1e293b,#0f172a);padding:1.5rem 2rem;border-bottom:1px solid #334155;display:flex;align-items:center;gap:1rem}
+.header h1{font-size:1.5rem;font-weight:600}
+.badge{background:#059669;color:#fff;padding:0.25rem 0.75rem;border-radius:9999px;font-size:0.75rem;font-weight:500}
+.badge.offline{background:#dc2626}
+.container{max-width:1400px;margin:0 auto;padding:2rem}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;margin-bottom:2rem}
+.card{background:#1e293b;border-radius:0.75rem;padding:1.25rem;border:1px solid #334155}
+.card h3{font-size:0.75rem;color:#94a3b8;margin-bottom:0.5rem;text-transform:uppercase;letter-spacing:0.05em}
+.card .value{font-size:1.75rem;font-weight:700;color:#f8fafc}
+.section{background:#1e293b;border-radius:0.75rem;padding:1.5rem;border:1px solid #334155;margin-bottom:1.5rem}
+.section h2{font-size:1.125rem;margin-bottom:1rem}
+textarea{width:100%;padding:0.75rem 1rem;background:#0f172a;border:1px solid #475569;border-radius:0.5rem;color:#e2e8f0;font-size:0.875rem;margin-bottom:0.75rem;resize:vertical;font-family:inherit}
+textarea:focus{outline:none;border-color:#3b82f6}
+button{background:#3b82f6;color:#fff;border:none;padding:0.75rem 1.5rem;border-radius:0.5rem;font-weight:500;cursor:pointer;font-size:0.875rem;margin-right:0.5rem}
+button:hover{background:#2563eb}
+button.secondary{background:#475569}
+.result{background:#0f172a;border-radius:0.5rem;padding:1rem;margin-top:0.75rem;border:1px solid #334155}
+.result .meta{font-size:0.75rem;color:#64748b;margin-bottom:0.5rem}
+.result .text{font-size:0.875rem;line-height:1.5;white-space:pre-wrap;word-break:break-word}
+.source{display:inline-block;background:#1e40af;color:#bfdbfe;padding:0.125rem 0.5rem;border-radius:0.25rem;font-size:0.625rem;margin-right:0.25rem}
+.sim{color:#059669;font-weight:600}
+.sev{display:inline-block;padding:0.125rem 0.5rem;border-radius:0.25rem;font-size:0.625rem;font-weight:700;margin-right:0.25rem}
+.sev.CRITICAL{background:#dc2626;color:#fff}
+.sev.HIGH{background:#ea580c;color:#fff}
+.sev.MEDIUM{background:#d97706;color:#fff}
+.sev.LOW{background:#475569;color:#cbd5e1}
+.ins-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1rem}
+.ins-box{background:#0f172a;border:1px solid #334155;border-radius:0.5rem;padding:1rem}
+.ins-box h4{font-size:0.75rem;color:#94a3b8;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:0.75rem}
+.ins-box ul{list-style:none}
+.ins-box li{font-size:0.8125rem;padding:0.3rem 0;border-bottom:1px solid #1e293b;display:flex;justify-content:space-between;align-items:center}
+.ins-box li:last-child{border-bottom:none}
+.cnt{color:#059669;font-weight:600;font-size:0.75rem}
+.empty{color:#64748b;padding:1rem}
+.loading{display:none;text-align:center;padding:1rem;color:#64748b}
+.loading.active{display:block}
+.row{display:flex;gap:0.5rem;flex-wrap:wrap}
+.mono{font-family:Consolas,Monaco,monospace;font-size:0.75rem}
+.tl-wrap{background:#0f172a;border:1px solid #334155;border-radius:0.5rem;padding:1rem}
+.tl-chart{display:flex;align-items:flex-end;gap:2px;height:120px}
+.tl-bar{flex:1;background:#3b82f6;border-radius:2px 2px 0 0;min-height:2px;position:relative;cursor:default;display:flex;flex-direction:column-reverse;overflow:hidden}
+/* WebSocket notifications */
+.ws-banner{display:none;position:fixed;top:0;left:0;right:0;z-index:100;padding:0.875rem 1.5rem;background:#7c2d12;color:#fff;font-size:0.875rem;font-weight:500;animation:slideDown 0.3s ease;border-bottom:2px solid #ea580c}
+.ws-banner.active{display:flex;align-items:center;gap:0.75rem;justify-content:space-between}
+.ws-banner .close{background:none;border:none;color:#fdba74;font-size:1.25rem;cursor:pointer;padding:0 0.5rem}
+.ws-banner .close:hover{color:#fff}
+@keyframes slideDown{from{transform:translateY(-100%)}to{translateY(0)}}
+.ws-toast{position:fixed;top:1rem;right:1rem;z-index:101;background:#1e293b;border:1px solid #ea580c;border-radius:0.5rem;padding:1rem 1.25rem;max-width:360px;box-shadow:0 10px 25px rgba(0,0,0,0.4);animation:slideIn 0.3s ease;display:none}
+.ws-toast.active{display:block}
+.ws-toast h4{font-size:0.8125rem;color:#fdba74;margin-bottom:0.375rem}
+.ws-toast p{font-size:0.75rem;color:#cbd5e1;line-height:1.4}
+@keyframes slideIn{from{transform:translateX(100%)}to{translateX(0)}}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:0.5rem}
+.dot.online{background:#059669;box-shadow:0 0 6px #059669}
+.dot.offline{background:#dc2626}
+.tl-bar:hover{filter:brightness(1.25)}
+.tl-bar .seg{width:100%}
+.seg-critical{background:#dc2626}.seg-high{background:#f97316}
+.seg-medium{background:#eab308}.seg-low{background:#3b82f6}
+.tl-legend{display:flex;gap:0.75rem;font-size:0.625rem;color:#94a3b8;margin-bottom:0.5rem}
+.tl-legend span::before{content:'';display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:4px;vertical-align:middle}
+.tl-bar .tip{display:none;position:absolute;bottom:calc(100% + 4px);left:50%;transform:translateX(-50%);background:#1e293b;border:1px solid #475569;padding:0.25rem 0.5rem;border-radius:0.25rem;font-size:0.625rem;white-space:nowrap;z-index:10}
+.tl-bar:hover .tip{display:block}
+.tl-axis{display:flex;justify-content:space-between;font-size:0.625rem;color:#64748b;margin-top:0.5rem}
+.tl-meta{font-size:0.8125rem;margin-bottom:0.75rem;display:flex;gap:1.5rem;flex-wrap:wrap}
+.trend-up{color:#ef4444}.trend-down{color:#22c55e}.trend-flat{color:#94a3b8}
+</style>
+</head>
+<body>
+<div id="ws-banner" class="ws-banner">
+    <span id="ws-banner-text">⚠️ Anomalia rilevata</span>
+    <button class="close" onclick="document.getElementById('ws-banner').classList.remove('active')" aria-label="Chiudi">×</button>
+</div>
+<div id="ws-toast" class="ws-toast">
+    <h4 id="ws-toast-title">Anomalia</h4>
+    <p id="ws-toast-body"></p>
+</div>
+<div class="header"><h1>&#128481;&#65039; Asgard RAG Dashboard</h1><span id="ragBadge" class="badge offline">RAG Offline</span></div>
+<div class="container">
+  <!-- Security Score Card -->
+  <div class="card" id="scoreCard" style="margin-bottom: 1.5rem;">
+    <h3 style="margin:0 0 0.5rem 0; font-size: 1.125rem;">🎯 La Tua Protezione Oggi</h3>
+    <div style="display:flex;align-items:center;gap:1rem;">
+      <div style="flex:1;">
+        <div style="height:1.5rem;background:#1e293b;border-radius:0.5rem;overflow:hidden;">
+          <div id="scoreFill" style="height:100%;width:20%;background:#ef4444;border-radius:0.5rem;transition:width 0.5s;"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:0.75rem;color:#94a3b8;margin-top:0.25rem;">
+          <span id="scoreLabel"># 🔴 Inizializzazione</span><span id="scoreValue">2/10</span>
+        </div>
+      </div>
+    </div>
+    <div id="scoreDetails" style="margin-top:0.75rem;font-size:0.8125rem;color:#94a3b8;"></div>
+  </div>
+
+  <div class="grid" id="statGrid"></div>
+  <div class="section">
+    <h2>&#128200; Storico Alert</h2>
+    <div class="row" style="margin-bottom:0.75rem">
+      <button class="secondary tl-btn" data-days="7" onclick="timeline(7)">7 giorni</button>
+      <button class="tl-btn" data-days="30" onclick="timeline(30)">30 giorni</button>
+      <button class="secondary tl-btn" data-days="90" onclick="timeline(90)">90 giorni</button>
+    </div>
+    <div id="timeline"><div class="empty">Caricamento storico...</div></div>
+  </div>
+  <div class="section">
+    <h2>&#9889; Analisi Proattiva</h2>
+    <div id="insights" class="ins-grid"><div class="empty">Caricamento insights...</div></div>
+  </div>
+  <div class="section">
+    <h2>&#128269; Ricerca Semantica</h2>
+    <textarea id="q" rows="3" placeholder="Es: Quali IP malevoli? Minacce note? Stato conformita?"></textarea>
+    <div class="row">
+      <button onclick="runQ()">Cerca</button>
+      <button class="secondary" onclick="document.getElementById('q').value=''">Pulisci</button>
+    </div>
+    <div id="qLoading" class="loading">Ricerca...</div>
+    <div id="qRes"></div>
+  </div>
+  <div class="section">
+    <h2>&#128194; Indicizzazione</h2>
+    <button onclick="runIndex()">&#128260; Re-indicizza tutto</button>
+    <div id="iLoading" class="loading">In corso...</div>
+    <div id="iRes"></div>
+  </div>
+  <div class="section">
+    <h2>&#128196; Report ed Export</h2>
+    <p style="font-size:0.8125rem;color:#94a3b8;margin-bottom:0.75rem">
+      Scarica i report pronti per il management (PDF, Markdown, CSV) o invia il
+      digest via Gjallarhorn. Richiedono la API key nel pannello di configurazione.
+    </p>
+    <div class="row" style="margin-bottom:0.5rem">
+      <button onclick="dlPdf()">&#128196; Report PDF</button>
+      <button class="secondary" onclick="dlMarkdown()">&#128220; Report Markdown</button>
+      <button class="secondary" onclick="dlTimeline()">&#128202; Timeline CSV</button>
+      <button class="secondary" onclick="dlSecurity()">&#128273; Security Audit (MD)</button>
+    </div>
+    <div class="row">
+      <button onclick="notifyReport()">&#128227; Invia digest report</button>
+      <button class="secondary" onclick="notifyTimeline()">&#128680; Invia alert timeline</button>
+    </div>
+    <div id="expMsg" class="result" style="display:none"></div>
+  </div>
+</div>
+<script>
+var K=localStorage.getItem('rag_key')||localStorage.getItem('asgard_ragnarok_key')||'';
+var H=K?{'X-API-Key':K,'Content-Type':'application/json'}:{'Content-Type':'application/json'};
+function g(p){return fetch(p).then(function(r){return r.json()})}
+function po(p,b){return fetch(p,{method:'POST',headers:H,body:JSON.stringify(b||{})}).then(function(r){return r.json()})}
+function esc(s){return String(s==null?'':s).replace(/</g,'&lt;')}
+function expMsg(html){
+  var el=document.getElementById('expMsg');
+  el.style.display='block';
+  el.innerHTML=html;
+  clearTimeout(el._t);
+  el._t=setTimeout(function(){el.style.display='none'},10000);
+}
+function authed(p,opts){opts=opts||{};opts.headers=opts.headers||{};opts.headers['X-API-Key']=K;return fetch(p,opts)}
+function saveBlob(blob,fn){
+  var a=document.createElement('a');
+  var url=URL.createObjectURL(blob);
+  a.href=url;a.download=fn;
+  document.body.appendChild(a);a.click();
+  setTimeout(function(){URL.revokeObjectURL(url);a.remove()},200);
+}
+function saveText(text,fn,mime){saveBlob(new Blob([text],{type:mime||'text/plain;charset=utf-8'}),fn)}
+function dlPdf(){
+  if(!K){expMsg('<div class="empty" style="color:#ef4444">Nessuna API key configurata. Impostala nel pannello di setup.</div>');return}
+  authed('/api/v1/rag/report/pdf').then(function(r){
+    if(!r.ok)throw new Error('Errore '+r.status);
+    return r.blob();
+  }).then(function(b){saveBlob(b,'asgard_report.pdf')})
+    .catch(function(e){expMsg('<div class="empty" style="color:#ef4444">'+esc(e.message)+'</div>')});
+}
+function dlMarkdown(){
+  if(!K){expMsg('<div class="empty" style="color:#ef4444">Nessuna API key configurata.</div>');return}
+  authed('/api/v1/rag/report').then(function(r){return r.json()}).then(function(j){
+    if(j.report){saveText(j.report,'asgard_report.md','text/markdown;charset=utf-8');expMsg('<span style="color:#4ade80">Report Markdown scaricato.</span>')}
+    else{expMsg('<div class="empty" style="color:#ef4444">'+esc(j.detail||j.error||'Errore')+'</div>')}
+  }).catch(function(e){expMsg('<div class="empty" style="color:#ef4444">'+esc(e.message)+'</div>')});
+}
+function dlTimeline(){
+  if(!K){expMsg('<div class="empty" style="color:#ef4444">Nessuna API key configurata.</div>');return}
+  authed('/api/v1/rag/timeline/export?days=30').then(function(r){
+    if(!r.ok)throw new Error('Errore '+r.status);
+    return r.blob();
+  }).then(function(b){saveBlob(b,'asgard_timeline_30d.csv')})
+    .catch(function(e){expMsg('<div class="empty" style="color:#ef4444">'+esc(e.message)+'</div>')});
+}
+function dlSecurity(){
+  if(!K){expMsg('<div class="empty" style="color:#ef4444">Nessuna API key configurata.</div>');return}
+  authed('/api/v1/rag/security/report').then(function(r){return r.json()}).then(function(j){
+    if(j.report){saveText(j.report,'asgard_security_audit.md','text/markdown;charset=utf-8');expMsg('<span style="color:#4ade80">Security audit scaricato.</span>')}
+    else{expMsg('<div class="empty" style="color:#ef4444">'+esc(j.detail||j.error||'Errore')+'</div>')}
+  }).catch(function(e){expMsg('<div class="empty" style="color:#ef4444">'+esc(e.message)+'</div>')});
+}
+function notifyReport(){
+  if(!K){expMsg('<div class="empty" style="color:#ef4444">Nessuna API key configurata.</div>');return}
+  authed('/api/v1/rag/report/notify',{method:'POST'}).then(function(r){return r.json()}).then(function(j){
+    var sent=j&&j.sent!==undefined?' (inviato: '+j.sent+')':'';
+    var conf=j&&j.configured===false?' Gjallarhorn non configurato.':'';
+    expMsg('<span style="color:#e2e8f0">'+esc(j.status||'ok')+sent+conf+'</span>');
+  }).catch(function(e){expMsg('<div class="empty" style="color:#ef4444">'+esc(e.message)+'</div>')});
+}
+function notifyTimeline(){
+  if(!K){expMsg('<div class="empty" style="color:#ef4444">Nessuna API key configurata.</div>');return}
+  authed('/api/v1/rag/timeline/notify?days=30',{method:'POST'}).then(function(r){return r.json()}).then(function(j){
+    expMsg('<span style="color:#e2e8f0">'+esc(j.status||'ok')+'</span>');
+  }).catch(function(e){expMsg('<div class="empty" style="color:#ef4444">'+esc(e.message)+'</div>')});
+}
+async function stats(){
+     var s=await g('/api/v1/rag/stats');
+   var b=document.getElementById('ragBadge');
+   var available = s.available && s.rag_available;
+   b.textContent=available?'RAG Online':'RAG Offline';
+   b.className=available?'badge':'badge offline';
+   var cols=available?s.collections:{};
+   var total=0;
+  for(var k in cols){total+=cols[k]}
+  var h='';
+  if(cols){
+    h+='<div class="card"><h3>Documenti</h3><div class="value">'+total+'</div></div>';
+    h+='<div class="card"><h3>Heimdall</h3><div class="value">'+(cols['heimdall_alerts']||0)+'</div></div>';
+    h+='<div class="card"><h3>Fenrir</h3><div class="value">'+(cols['fenrir_ioc']||0)+'</div></div>';
+    h+='<div class="card"><h3>Triage</h3><div class="value">'+(cols['mjolnir_triage']||0)+'</div></div>';
+    h+='<div class="card"><h3>Scan</h3><div class="value">'+(cols['bifrost_scans']||0)+'</div></div>';
+    h+='<div class="card"><h3>Compliance</h3><div class="value">'+(cols['forseti_compliance']||0)+'</div></div>';
+  }
+     document.getElementById('statGrid').innerHTML=h||'<div class="empty">Stats non disponibili</div>';
+   computeScore(s);
+}
+
+// Security Score: valore deterministico (0-10) basato su indicatori oggettivi
+function computeScore(s){
+  var sc=document.getElementById('scoreFill');
+  var sv=document.getElementById('scoreValue');
+  var sl=document.getElementById('scoreLabel');
+  var sd=document.getElementById('scoreDetails');
+  if(!s||!s.security_score){
+    sc.style.width='20%';sc.style.background='#ef4444';
+    sv.textContent='2/10';sl.textContent='# 🔴 Inizializzazione';
+    sd.innerHTML='<span style="color:#94a3b4">Indicizza i dati e ricarica la pagina</span>';
+    return;
+  }
+  var score=s.security_score.score;
+  var pct=score*10;
+  sc.style.width=pct+'%';
+  var colors={0:'#ef4444',1:'#ef4444',2:'#f97316',3:'#eab308',4:'#eab308',5:'#eab308',6:'#22c57e',7:'#22c57e',8:'#22c57e',9:'#22c57e',10:'#22c57e'};
+  sc.style.background=colors[score]||'#22c57e';
+  sv.textContent=score+'/10';
+    var emoji = score >= 8 ? '🟢' : (score >= 5 ? '🟡' : '🔴');
+  sl.textContent = '# ' + emoji + ' ' + s.security_score.label;
+  sl.style.color=score>=8?'#22c57e':(score>=5?'#eab308':'#ef4444');
+  var cov=s.security_score.coverage;
+  var details='';
+  if(cov.hids)details+='<span style="color:#4ade80">• HIDS ✅</span> ';
+  if(cov.threat_intel)details+='<span style="color:#4ade80">• Threat Intel ✅</span> ';
+  if(cov.compliance)details+='<span style="color:#4ade80">• GDPR/NIS2 ✅</span> ';
+  if(cov.scan)details+='<span style="color:#4ade80">• Scanner ✅</span> ';
+  if(cov.soar)details+='<span style="color:#4ade80">• SOAR ✅</span> ';
+  if(cov.rag)details+='<span style="color:#4ade80">• RAG ✅</span> ';
+  if(!details)details='<span style="color:#94a3b4">Completa l\'indicizzazione per aumentare il punteggio</span>';
+  sd.innerHTML=details;
+}
+}
+async function runQ(){
+  var q=document.getElementById('q').value.trim();
+  if(!q)return;
+  document.getElementById('qLoading').classList.add('active');
+  document.getElementById('qRes').innerHTML='';
+  try{
+    var r=await po('/api/v1/rag/query',{query:q,n_results:5});
+    if(r.status==='success'){
+      var h='';
+      if(!r.results.length){h='<div class="empty">Nessun risultato. Indicizza prima i dati.</div>'}
+      r.results.forEach(function(x){
+        h+='<div style="margin-bottom:0.5rem;padding-bottom:0.5rem;border-bottom:1px solid #334155">'+
+          '<div class="meta"><span class="source">'+esc(x.metadata&&x.metadata.source?x.metadata.source:'?')+'</span>'+
+          '<span class="sim">'+Math.round((x.similarity||0)*100)+'%</span></div>'+
+          '<div class="text">'+esc(x.text)+'</div></div>';
+      });
+      document.getElementById('qRes').innerHTML=h;
+    } else {
+      document.getElementById('qRes').innerHTML='<div class="empty" style="color:#ef4444">'+esc(r.error||'Errore')+'</div>';
+    }
+  } catch(e){
+    document.getElementById('qRes').innerHTML='<div class="empty" style="color:#ef4444">'+esc(e.message)+'</div>';
+  }
+  document.getElementById('qLoading').classList.remove('active');
+}
+async function runIndex(){
+  document.getElementById('iLoading').classList.add('active');
+  document.getElementById('iRes').innerHTML='';
+  try{
+    var r=await po('/api/v1/rag/index');
+    if(r.status==='success'){
+      var x=r.results||{};
+      document.getElementById('iRes').innerHTML='<div class="result"><div class="meta">Completata</div>'+
+        '<div class="mono">Totale: '+x.total+' | H:'+(x.heimdall||0)+' F:'+(x.fenrir||0)+
+        ' M:'+(x.mjolnir||0)+' B:'+(x.bifrost||0)+' Fs:'+(x.forseti||0)+'</div></div>';
+      stats();
+    } else {
+      document.getElementById('iRes').innerHTML='<div class="empty" style="color:#ef4444">'+esc(r.error||'Errore')+'</div>';
+    }
+  } catch(e){
+    document.getElementById('iRes').innerHTML='<div class="empty" style="color:#ef4444">'+esc(e.message)+'</div>';
+  }
+  document.getElementById('iLoading').classList.remove('active');
+}
+function sevBadge(s){return s&&s!=='LOW'?'<span class="sev '+esc(s)+'">'+esc(s)+'</span>':''}
+function li(l,r){return '<li><span>'+l+'</span><span class="cnt">'+r+'</span></li>'}
+function box(t,items){return '<div class="ins-box"><h4>'+t+'</h4><ul>'+(items||'<li><span class="empty">Nessun dato</span></li>')+'</ul></div>'}
+async function insights(){
+  try{
+    var r=await g('/api/v1/rag/insights');
+    if(!r.available){document.getElementById('insights').innerHTML='<div class="empty">Insights non disponibili</div>';return}
+    var i=r.insights;
+    var topIps='';(i.top_ips||[]).forEach(function(x){topIps+=li(esc(x.ip)+' '+sevBadge(x.max_severity),x.count+' alert')});
+    var sev='';for(var k in (i.severity_distribution||{})){sev+=li(esc(k),i.severity_distribution[k])}
+    var ioc='';(i.top_ioc||[]).forEach(function(x){ioc+=li(esc(x.value),x.count)});
+    var cves='';(i.cve_references||[]).forEach(function(x){cves+=li(esc(x.cve),'x'+x.count)});
+    var pbs='';(i.playbooks||[]).forEach(function(x){pbs+=li(esc(x.playbook),'')});
+    var comp=(i.compliance||{}).assessment_files||0;
+    document.getElementById('insights').innerHTML=
+      box('🎯 Top IP Attaccanti',topIps)+
+      box('📊 Distribuzione Severità',sev)+
+      box('🦠 IOC Ricorrenti',ioc)+
+      box('🔓 CVE Correlate',cves)+
+      box('📜 Playbook Disponibili',pbs)+
+      box('✅ Compliance',li('Report Forseti',comp));
+  }catch(e){
+    document.getElementById('insights').innerHTML='<div class="empty" style="color:#ef4444">'+esc(e.message)+'</div>';
+  }
+}
+var TREND_TXT={up:'&#8593; in aumento',down:'&#8595; in calo',flat:'&#8594; stabile'};
+var TL_DAYS=30;
+var SEV_COLORS={CRITICAL:'seg-critical',HIGH:'seg-high',MEDIUM:'seg-medium',LOW:'seg-low'};
+async function timeline(days){
+  if(days)TL_DAYS=days;
+  document.querySelectorAll('.tl-btn').forEach(function(b){
+    b.className='tl-btn '+(parseInt(b.dataset.days)===TL_DAYS?'':'secondary');
+  });
+  try{
+    var r=await g('/api/v1/rag/timeline?days='+TL_DAYS);
+    var el=document.getElementById('timeline');
+    if(!r.available){el.innerHTML='<div class="empty">Storico non disponibile</div>';return}
+    var t=r.timeline,s=t.series||[];
+    var max=1;s.forEach(function(d){if(d.count>max)max=d.count});
+    var bars='';s.forEach(function(d){
+      var h=Math.max(Math.round((d.count/max)*100),1);
+      var sevTip='',segs='';
+      for(var k in (d.by_severity||{})){
+        var c=d.by_severity[k];if(!c)continue;
+        sevTip+=k+'='+c+' ';
+        segs+='<div class="seg '+(SEV_COLORS[k]||'seg-low')+'" style="height:'+Math.round((c/d.count)*100)+'%"></div>';
+      }
+      bars+='<div class="tl-bar" style="height:'+h+'%">'+segs+
+        '<div class="tip">'+esc(d.date)+': '+d.count+' alert'+(sevTip?' ('+esc(sevTip.trim())+')':'')+'</div></div>';
+    });
+    var tr=t.trend||{};
+    var cls=tr.direction==='up'?'trend-up':(tr.direction==='down'?'trend-down':'trend-flat');
+    var peak=t.peak?('Peak: '+esc(t.peak.date)+' ('+t.peak.count+' alert)'):'Peak: nessuno';
+    var sevTot='';for(var k in (t.by_severity||{})){if(t.by_severity[k])sevTot+='<span>'+esc(k)+': <b>'+t.by_severity[k]+'</b></span>'}
+    var anomalies='';
+    var sevAnom=(t.severity_anomalies||[]);
+    if((t.anomalies||[]).length||sevAnom.length){
+      var items=t.anomalies.map(function(a){return esc(a.date)+' ('+a.count+' alert, media '+a.avg_baseline+'/giorno)'}).join(', ');
+      var sevItems=sevAnom.map(function(a){return esc(a.date)+' '+esc(a.severity)+' x'+a.count+' (media '+a.avg_baseline+')'}).join(', ');
+      anomalies='<div style="background:#7f1d1d;border:1px solid #dc2626;border-radius:0.5rem;padding:0.75rem;margin-bottom:0.75rem;font-size:0.8125rem">'+
+        ((t.anomalies||[]).length?'<b>&#9888;&#65039; Spike anomali rilevati ('+t.anomalies.length+'):</b> '+items+'<br>':'')+
+        (sevAnom.length?'<b>&#128680; Spike di severit&agrave; ('+sevAnom.length+'):</b> '+sevItems:'')+'</div>';
+    }
+    el.innerHTML=anomalies+'<div class="tl-wrap">'+
+      '<div class="tl-legend"><span class="seg-critical">CRITICAL</span><span class="seg-high">HIGH</span><span class="seg-medium">MEDIUM</span><span class="seg-low">LOW</span></div>'+
+      '<div class="tl-meta"><span>Totale: <b>'+t.total+'</b></span>'+sevTot+
+      '<span class="'+cls+'">'+TREND_TXT[tr.direction||'flat']+(tr.delta_pct!==null&&tr.delta_pct!==undefined?' ('+tr.delta_pct+'%)':'')+'</span></div>'+
+      '<div class="tl-chart">'+bars+'</div>'+
+      '<div class="tl-axis"><span>'+esc(s.length?s[0].date:'')+'</span><span>'+peak+'</span><span>'+esc(s.length?s[s.length-1].date:'')+'</span></div>'+
+      '</div>';
+  }catch(e){
+    document.getElementById('timeline').innerHTML='<div class="empty" style="color:#ef4444">'+esc(e.message)+'</div>';
+  }
+}
+stats();
+insights();
+timeline();
+setInterval(stats,30000);
+setInterval(insights,60000);
+setInterval(timeline,120000);
+// ==== WebSocket in tempo reale (anomalie push) ====
+let ws=null,wsRetry=0;
+function connectWS(){
+  const proto=location.protocol==='https:'?'wss':'ws';
+  try{ws=new WebSocket(proto+'://'+location.host+'/ws/telemetry');}catch(e){return;}
+  ws.onopen=()=>{wsRetry=0;};
+  ws.onmessage=(ev)=>{
+    let d;try{d=JSON.parse(ev.data);}catch(e){return;}
+    if(d.type==='rag_anomaly_detected'&&d.anomalies&&d.anomalies.length){showToast(d.anomalies);}
+  };
+  ws.onclose=()=>{ // retry con backoff esponenziale (max 60s)
+    wsRetry=Math.min(wsRetry+1,6);
+    setTimeout(connectWS,Math.min(1000*Math.pow(2,wsRetry),60000));
+  };
+}
+function showToast(anoms){
+  let box=document.getElementById('anomaly-toast');
+  if(!box){
+    box=document.createElement('div');
+    box.id='anomaly-toast';
+    box.style.cssText='position:fixed;top:16px;right:16px;background:#3b1d1d;border:1px solid #e74c3c;'+
+      'color:#f5f5f5;padding:12px 16px;border-radius:8px;max-width:380px;z-index:9999;'+
+      'box-shadow:0 4px 16px rgba(0,0,0,.5);font-size:13px;';
+    document.body.appendChild(box);
+  }
+  box.innerHTML='<strong>⚠️ Anomalia rilevata in tempo reale</strong><br>'+
+    anoms.slice(0,3).map(a=>'• '+esc(a.date)+' — '+esc(a.severity||'spike')+
+      ' ('+esc(a.count)+' alert, baseline '+esc(a.avg_baseline)+')').join('<br>')+
+    (anoms.length>3?'<br><em>…e '+(anoms.length-3)+' altre</em>':'')+
+    '<br><button onclick="this.parentElement.remove()" style="margin-top:8px;background:#e74c3c;'+
+    'border:none;color:#fff;padding:4px 10px;border-radius:4px;cursor:pointer;">Chiudi</button>';
+  clearTimeout(box._timer);
+  box._timer=setTimeout(()=>{if(box.parentElement)box.remove();},30000);
+  timeline(); // aggiorna il grafico con i nuovi dati
+}
+connectWS();
+</script>
+</body>
+</html>
