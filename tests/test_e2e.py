@@ -101,6 +101,18 @@ def test_e2e_dashboard_served():
     assert "text/html" in res.headers.get("content-type", "")
 
 
+def test_e2e_frontend_has_account_ui():
+    """Il frontend Tauri include login/logout RBAC e visibilità admin."""
+    res = client.get("/")
+    assert res.status_code == 200
+    html = res.text
+    assert "doLogin()" in html
+    assert "doLogout()" in html
+    assert "accountLoggedIn" in html
+    assert "admin-only" in html
+    assert "asgard_session_token" in html
+
+
 def test_e2e_chat_returns_rag_context_without_llm():
     """Chat senza LLM: con RAG attivo restituisce contesto trovato."""
     tmp = tempfile.mkdtemp(prefix="asgard_e2e_chat_")

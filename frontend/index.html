@@ -80,7 +80,21 @@
             </button>
         </nav>
 
-        <div class="p-4 border-t border-[#1d1d1f] text-xs">
+        <div class="p-4 border-t border-[#1d1d1f] text-xs space-y-2">
+            <!-- Account: sessione utente (RBAC) -->
+            <div id="accountLoggedOut" class="hidden">
+                <input type="text" id="loginUsername" placeholder="Username" autocomplete="username"
+                       class="w-full px-3 py-2 bg-[#1c1c1e] border border-[#2c2c2e] rounded-lg text-slate-200 placeholder-slate-600 focus:outline-none focus:border-white/30 mb-1.5">
+                <input type="password" id="loginPassword" placeholder="Password" autocomplete="current-password"
+                       class="w-full px-3 py-2 bg-[#1c1c1e] border border-[#2c2c2e] rounded-lg text-slate-200 placeholder-slate-600 focus:outline-none focus:border-white/30 mb-1.5">
+                <button onclick="doLogin()" id="loginBtn" class="w-full py-2 bg-white/10 hover:bg-white/20 rounded-full text-white font-medium transition">Accedi</button>
+                <p id="loginMsg" class="text-[10px] mt-1.5 text-slate-500"></p>
+            </div>
+            <div id="accountLoggedIn" class="hidden flex items-center justify-between">
+                <span id="userBadge" class="text-[10px] font-mono px-2 py-1 bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-full"></span>
+                <button onclick="doLogout()" class="text-[10px] text-slate-400 hover:text-red-400 transition">Esci</button>
+            </div>
+            <div class="text-xs">
             <button onclick="openSettings()" class="w-full py-2.5 bg-[#1c1c1e] hover:bg-[#2c2c2e] rounded-full text-slate-200 transition flex items-center justify-center space-x-2 font-medium shadow-sm">
                 <span>⚙️</span> <span>LLM & Settings</span>
             </button>
@@ -570,6 +584,7 @@
             setInterval(refreshHealth, 30000);
             connectWebSocket();
             detectOllama();
+            refreshAccount();
             const setupForm = document.getElementById('setupForm');
             if (setupForm) setupForm.addEventListener('submit', submitSetupForm);
         });
@@ -1060,8 +1075,89 @@
         }
 
         function ragnarokAuthHeaders() {
+            // Session token (RBAC) takes precedence; API key is the fallback.
+            const token = localStorage.getItem('asgard_session_token') || '';
+            if (token) return { "Authorization": "Bearer " + token };
             const key = localStorage.getItem('asgard_ragnarok_key') || '';
             return key ? { "X-API-Key": key } : {};
+        }
+
+        // --- Account / session (RBAC) ---
+        async function refreshAccount() {
+            const loggedOut = document.getElementById('accountLoggedOut');
+            const loggedIn = document.getElementById('accountLoggedIn');
+            const badge = document.getElementById('userBadge');
+            const token = localStorage.getItem('asgard_session_token');
+            if (!token) { loggedOut.classList.remove('hidden'); loggedIn.classList.add('hidden'); applyRoleVisibility(null); return; }
+            try {
+                const res = await fetch(`${API_BASE}/api/v1/auth/me`, { headers: ragnarokAuthHeaders() });
+                if (!res.ok) throw new Error('invalid');
+                const data = await res.json();
+                badge.textContent = `${data.user.username} (${data.user.role})`;
+                loggedIn.classList.remove('hidden');
+                loggedIn.classList.add('flex');
+                loggedOut.classList.add('hidden');
+                applyRoleVisibility(data.user.role);
+            } catch (e) {
+                localStorage.removeItem('asgard_session_token');
+                loggedOut.classList.remove('hidden');
+                loggedIn.classList.add('hidden');
+                applyRoleVisibility(null);
+            }
+        }
+
+        async function doLogin() {
+            const u = document.getElementById('loginUsername').value.trim();
+            const p = document.getElementById('loginPassword').value;
+            const msg = document.getElementById('loginMsg');
+            const btn = document.getElementById('loginBtn');
+            if (!u || !p) { msg.textContent = 'Inserisci username e password.'; return; }
+            btn.disabled = true; btn.textContent = '...';
+            try {
+                const res = await fetch(`${API_BASE}/api/v1/auth/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: u, password: p })
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    if (res.status === 429) {
+                        msg.textContent = `Account bloccato. Riprova tra ${Math.ceil(data.detail.retry_after_seconds / 60)} min.`;
+                    } else {
+                        msg.textContent = 'Credenziali non valide.';
+                    }
+                    return;
+                }
+                localStorage.setItem('asgard_session_token', data.token);
+                msg.textContent = '';
+                document.getElementById('loginPassword').value = '';
+                showToast(`Benvenuto, ${data.user.username}!`, 'success');
+                refreshAccount();
+            } catch (e) {
+                msg.textContent = 'Errore di rete: backend non raggiungibile.';
+            } finally {
+                btn.disabled = false; btn.textContent = 'Accedi';
+            }
+        }
+
+        async function doLogout() {
+            const token = localStorage.getItem('asgard_session_token');
+            if (token) {
+                try {
+                    await fetch(`${API_BASE}/api/v1/auth/logout`, { method: 'POST', headers: ragnarokAuthHeaders() });
+                } catch (e) { /* best-effort: remove locally anyway */ }
+            }
+            localStorage.removeItem('asgard_session_token');
+            showToast('Sessione terminata.', 'info');
+            refreshAccount();
+        }
+
+        // Hide admin-only actions from non-admin users (server still enforces RBAC)
+        function applyRoleVisibility(role) {
+            document.querySelectorAll('.admin-only').forEach(el => {
+                if (role === 'admin') { el.classList.remove('hidden'); }
+                else { el.classList.add('hidden'); }
+            });
         }
 
         const SETUP_FIELD_IDS = [
