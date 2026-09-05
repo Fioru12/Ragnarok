@@ -208,6 +208,13 @@ Ragnarök now supports **multi-user authentication with role-based access contro
 | `/api/v1/auth/users` | POST | Admin | Create a user (`{username, password, role}`) |
 | `/api/v1/auth/users/{id}` | DELETE | Admin | Deactivate a user |
 | `/api/v1/audit-log` | GET | Admin | View audit trail |
+| `/api/v1/backup` | POST | Admin | Create a verified backup of all persistent state |
+| `/api/v1/backup/verify` | POST | Admin | Verify a backup archive against its sha256 manifest |
+| `/api/v1/backup/restore` | POST | Admin | Verify + restore a backup to the live stores |
+
+### Backup & restore
+
+Every persistent store (auth DB, audit trail, RAG vector index, conversation memory, security score history) can be backed up to a single zip archive containing a `manifest.json` with the sha256 of each entry. Restores are refused unless the archive verifies against the manifest — a corrupted backup can never silently overwrite live data. Archives are saved to `backend/backups/`. After a restore, restart the backend so live connections pick up the restored data.
 
 ### Audit log
 

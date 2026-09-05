@@ -1657,3 +1657,113 @@ def test_lockout_expires_after_window(fresh_auth_db, lockout_policy):
     res = client.post("/api/v1/auth/login", json={"username": "exp_user", "password": "exp_pass_123"})
     assert res.status_code == 200
 
+
+
+# ----------------------------------------------------------------------
+# Backup & restore tests (isolated stores in a temp dir)
+# ----------------------------------------------------------------------
+
+
+@pytest.fixture()
+def backup_env(monkeypatch, tmp_path):
+    """Point every data store at temp files and populate them minimally."""
+    import time as _time
+    import auth as auth_module
+    import server as server_module
+    import rag as rag_module
+
+    auth_db = str(tmp_path / "auth.db")
+    audit_db = str(tmp_path / "audit.db")
+    rag_dir = str(tmp_path / "rag_db")
+    os.makedirs(rag_dir, exist_ok=True)
+
+    # Populate the stores so the backup has real content
+    monkeypatch.setattr(auth_module, "AUTH_DB_PATH", auth_db)
+    auth_module.init_auth_db()  # creates tables + default admin
+    # The login endpoint reads this (now temp) DB: recreate the shared test users
+    auth_module.create_user("viewer_test", "viewer_pass", "viewer")
+    auth_module.create_user("admin_test", "admin_pass", "admin")
+    import sqlite3 as _sqlite3
+    conn = _sqlite3.connect(audit_db)
+    conn.execute("CREATE TABLE events (timestamp REAL, type TEXT, payload TEXT)")
+    conn.execute("INSERT INTO events VALUES (?, ?, ?)", (_time.time(), "test", "{}"))
+    conn.commit()
+    conn.close()
+    with open(os.path.join(rag_dir, "memory.db"), "w", encoding="utf-8") as f:
+        f.write("placeholder-vector-data")
+
+    monkeypatch.setattr(server_module, "AUDIT_DB_PATH", audit_db)
+    monkeypatch.setattr(rag_module, "get_db_path", lambda: rag_dir)
+    return {"tmp": str(tmp_path), "auth_db": auth_db, "audit_db": audit_db, "rag_dir": rag_dir}
+
+
+def test_backup_create_and_verify_roundtrip(backup_env):
+    """create_backup produces an archive that verify_backup validates."""
+    import backup as backup_mod
+    result = backup_mod.create_backup(output_dir=backup_env["tmp"])
+    assert result["files"] >= 3
+    assert {"auth_db", "audit_db", "rag_vector_db"} <= set(result["stores"])
+    check = backup_mod.verify_backup(result["path"])
+    assert check["verified"] is True
+    assert check["checked"] == result["files"]
+
+
+def test_backup_restore_recovers_data(backup_env):
+    """Restore overwrites the live store with the backed-up content."""
+    import backup as backup_mod
+    import sqlite3 as _sqlite3
+
+    result = backup_mod.create_backup(output_dir=backup_env["tmp"])
+
+    # Mutate the live auth DB after the backup (delete the admin user)
+    conn = _sqlite3.connect(backup_env["auth_db"])
+    conn.execute("DELETE FROM users")
+    conn.commit()
+    conn.close()
+
+    # Restore, then confirm the admin user is back
+    backup_mod.restore_backup(result["path"])
+    conn = _sqlite3.connect(backup_env["auth_db"])
+    count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    conn.close()
+    assert count >= 1
+
+
+def test_backup_verify_detects_tampering(backup_env):
+    """A corrupted archive must fail verification — never a silent pass."""
+    import backup as backup_mod
+    import zipfile as _zipfile
+
+    result = backup_mod.create_backup(output_dir=backup_env["tmp"])
+    tampered = backup_env["tmp"] + "/tampered.zip"
+
+    with _zipfile.ZipFile(result["path"], "r") as src, _zipfile.ZipFile(tampered, "w") as dst:
+        for name in src.namelist():
+            if name.endswith("auth_db.db"):
+                dst.writestr(name, b"tampered-bytes")  # content no longer matches manifest
+            else:
+                dst.writestr(name, src.read(name))
+
+    try:
+        backup_mod.verify_backup(tampered)
+        raise AssertionError("verify_backup accepted a tampered archive")
+    except RuntimeError as e:
+        assert "corrupted" in str(e) or "verification failed" in str(e).lower()
+    # And a restore of the tampered archive must refuse to write anything
+    try:
+        backup_mod.restore_backup(tampered)
+        raise AssertionError("restore_backup accepted a tampered archive")
+    except RuntimeError:
+        pass
+
+
+def test_backup_endpoints_require_admin(backup_env):
+    """Backup endpoints are admin-only; other roles get 401."""
+    viewer = _login("viewer_test", "viewer_pass")
+    res = client.post("/api/v1/backup", headers=_auth_headers(viewer))
+    assert res.status_code == 401
+
+    admin = _login("admin_test", "admin_pass")
+    res = client.post("/api/v1/backup", headers=_auth_headers(admin))
+    assert res.status_code == 200
+    assert res.json()["files"] >= 3

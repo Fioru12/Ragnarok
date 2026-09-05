@@ -776,6 +776,47 @@ async def get_status():
     }
 
 
+# --- Backup & restore (admin only) ---
+
+class RestoreRequest(BaseModel):
+    backup_path: str
+
+
+@app.post("/api/v1/backup")
+def api_create_backup(user: dict = Depends(require_role("admin"))):
+    """Create a verified backup archive of all persistent state."""
+    import backup as backup_mod
+    try:
+        result = backup_mod.create_backup()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Backup failed: {e}")
+    record_audit_event({"type": "backup_create", "user": user["username"], "file": result["path"]})
+    return result
+
+
+@app.post("/api/v1/backup/verify")
+def api_verify_backup(req: RestoreRequest, user: dict = Depends(require_role("admin"))):
+    """Verify a backup archive against its sha256 manifest."""
+    import backup as backup_mod
+    try:
+        return backup_mod.verify_backup(req.backup_path)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/v1/backup/restore")
+def api_restore_backup(req: RestoreRequest, user: dict = Depends(require_role("admin"))):
+    """Verify and restore a backup archive to the live stores."""
+    import backup as backup_mod
+    try:
+        result = backup_mod.restore_backup(req.backup_path)
+    except Exception as e:
+        record_audit_event({"type": "backup_restore", "user": user["username"], "success": False, "error": str(e)})
+        raise HTTPException(status_code=400, detail=str(e))
+    record_audit_event({"type": "backup_restore", "user": user["username"], "success": True, "file": req.backup_path})
+    return result
+
+
 @app.get("/api/v1/audit-log")
 def get_audit_log(limit: int = 50, offset: int = 0, user: dict = Depends(require_role("admin"))):
     limit = max(1, min(limit, 500))
