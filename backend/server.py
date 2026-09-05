@@ -28,7 +28,9 @@ from auth import (
     create_user,
     set_user_role,
     deactivate_user,
+    update_user_credentials,
     init_auth_db,
+    SESSION_TTL,
 )
 
 # --- Asgard RAG Engine (Retrieval-Augmented Generation) ---
@@ -214,6 +216,86 @@ async def auth_deactivate_user(user_id: int, user: dict = Depends(require_role("
     if not deactivate_user(user_id):
         raise HTTPException(status_code=404, detail="User not found")
     return {"status": "ok", "user_id": user_id}
+
+
+# ======================================================================
+# Auth Setup Wizard — "claim the default admin" flow
+#
+# On first start the auth module creates a default `admin` with a random
+# password printed to the server console. The wizard asks for that console
+# password plus the new permanent credentials, and swaps them in place.
+# ======================================================================
+
+@app.get("/api/v1/auth/setup")
+async def auth_setup_status():
+    """
+    Setup wizard status. No authentication required.
+    `bootstrap_available` is True while the default admin still has its
+    console-generated password (i.e. nobody has claimed it yet).
+    """
+    users = list_users()
+    default_admin = next((u for u in users if u["username"] == "admin"), None)
+    return {
+        "configured": len(users) > 0,
+        "user_count": len(users),
+        "bootstrap_available": default_admin is not None,
+        "auth_secret_set": bool(os.environ.get("RAGNAROK_AUTH_SECRET")),
+        "session_ttl": SESSION_TTL,
+    }
+
+
+class SetupAdminRequest(BaseModel):
+    console_password: str  # the random password printed at first startup
+    new_username: str
+    new_password: str
+
+
+@app.post("/api/v1/auth/setup/admin")
+async def auth_setup_claim_admin(req: SetupAdminRequest):
+    """
+    Claim the default admin account: verify the one-time console password,
+    then replace username and password with the permanent credentials.
+    Requires: console_password (from server startup log), new_username,
+    new_password (min 8 chars). Works only while the default admin exists
+    unclaimed; 409 once claimed.
+    """
+    users = list_users()
+    default_admin = next((u for u in users if u["username"] == "admin"), None)
+    if default_admin is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Default admin already claimed or missing. Use /api/v1/auth/login.",
+        )
+
+    if not req.new_username or not req.new_password:
+        raise HTTPException(status_code=400, detail="new_username and new_password are required")
+
+    if len(req.new_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+
+    # Verify the console password against the default admin account
+    if not check_user("admin", req.console_password):
+        raise HTTPException(status_code=401, detail="Console password does not match the default admin")
+
+    ok = update_user_credentials(
+        default_admin["id"],
+        new_username=req.new_username,
+        new_password=req.new_password,
+    )
+    if not ok:
+        raise HTTPException(status_code=400, detail="Failed to update admin credentials")
+
+    # Auto-login: fresh session for the renamed admin
+    token = create_session(default_admin["id"])
+    update_last_login(default_admin["id"])
+
+    return {
+        "status": "admin_claimed",
+        "user": {"id": default_admin["id"], "username": req.new_username, "role": "admin"},
+        "token": token,
+        "message": "Admin claimed successfully. Store this token securely — it is your session.",
+    }
+
 
 # ======================================================================
 # Asgard RAG API Endpoints

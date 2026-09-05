@@ -323,6 +323,42 @@ def require_role(*allowed_roles: str):
     return _checker
 
 
+def update_user_credentials(
+    user_id: int,
+    new_username: Optional[str] = None,
+    new_password: Optional[str] = None,
+) -> bool:
+    """
+    Update a user's username and/or password (used by the setup wizard's
+    'claim the default admin' flow). Returns False if the user does not
+    exist or the new username is already taken.
+    """
+    if not new_username and not new_password:
+        return False
+    conn = _connect()
+    try:
+        row = conn.execute("SELECT id FROM users WHERE id = ?", (user_id,)).fetchone()
+        if not row:
+            return False
+        if new_username:
+            clash = conn.execute(
+                "SELECT id FROM users WHERE username = ? AND id != ?",
+                (new_username, user_id),
+            ).fetchone()
+            if clash:
+                return False
+            conn.execute("UPDATE users SET username = ? WHERE id = ?", (new_username, user_id))
+        if new_password:
+            conn.execute(
+                "UPDATE users SET password_hash = ? WHERE id = ?",
+                (_hash_password(new_password), user_id),
+            )
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
 # Convenience: any authenticated user (regardless of role)
 require_auth = require_role("admin", "analyst", "viewer")
 

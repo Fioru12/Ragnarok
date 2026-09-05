@@ -1428,26 +1428,31 @@ def test_user_management_requires_admin():
 
 def test_admin_can_create_and_list_users():
     """Admin can create a user and see it in the list."""
+    import uuid
     token = _login("admin_test", "admin_pass")
     headers = _auth_headers(token)
 
-    res = client.post("/api/v1/auth/users", json={"username": "new_user", "password": "new_pass", "role": "analyst"}, headers=headers)
+    uname = f"new_user_{uuid.uuid4().hex[:8]}"  # unique per run: auth DB persists on disk
+    res = client.post("/api/v1/auth/users", json={"username": uname, "password": "new_pass", "role": "analyst"}, headers=headers)
     assert res.status_code == 200
-    assert res.json()["username"] == "new_user"
+    assert res.json()["username"] == uname
 
     res = client.get("/api/v1/auth/users", headers=headers)
     assert res.status_code == 200
     usernames = [u["username"] for u in res.json()["users"]]
-    assert "new_user" in usernames
+    assert uname in usernames
 
 
 def test_admin_can_deactivate_user():
     """Admin can deactivate a user; deactivated user cannot login."""
+    import uuid
     token = _login("admin_test", "admin_pass")
     headers = _auth_headers(token)
 
+    uname = f"to_deactivate_{uuid.uuid4().hex[:8]}"
     # Create a user to deactivate
-    res = client.post("/api/v1/auth/users", json={"username": "to_deactivate", "password": "pass", "role": "viewer"}, headers=headers)
+    res = client.post("/api/v1/auth/users", json={"username": uname, "password": "pass", "role": "viewer"}, headers=headers)
+    assert res.status_code == 200, res.text
     uid = res.json()["id"]
 
     # Deactivate
@@ -1455,7 +1460,7 @@ def test_admin_can_deactivate_user():
     assert res.status_code == 200
 
     # Cannot login anymore
-    res = client.post("/api/v1/auth/login", json={"username": "to_deactivate", "password": "pass"})
+    res = client.post("/api/v1/auth/login", json={"username": uname, "password": "pass"})
     assert res.status_code == 401
 
 
@@ -1480,4 +1485,111 @@ def test_password_hashing_is_safe():
     assert ":" in h
     assert _verify_password("mypassword", h) is True
     assert _verify_password("wrongpassword", h) is False
+
+
+# ----------------------------------------------------------------------
+# Auth Setup Wizard tests ("claim the default admin" flow)
+#
+# These use an ISOLATED auth DB (monkeypatched to a temp file) because the
+# bootstrap flow only applies to the unclaimed default admin, while the
+# rest of this module deliberately creates users in the shared test DB.
+# ----------------------------------------------------------------------
+
+import pytest  # noqa: E402
+import auth as _auth_pkg
+
+
+@pytest.fixture()
+def fresh_auth_db(monkeypatch, tmp_path):
+    """Point the auth module at an empty temp DB with a KNOWN console password."""
+    import auth as auth_module
+    db_path = str(tmp_path / "isolated_auth.db")
+    monkeypatch.setattr(auth_module, "AUTH_DB_PATH", db_path)
+    auth_module.init_auth_db()  # creates default admin w/ random console password
+    admin = next(u for u in auth_module.list_users() if u["username"] == "admin")
+    # Replace the random console password with a known one for the tests
+    assert auth_module.update_user_credentials(admin["id"], new_password="console_pw_123")
+    yield db_path
+
+
+def test_auth_setup_status_bootstrap_available(fresh_auth_db):
+    """Status reports the default admin as claimable when unclaimed."""
+    res = client.get("/api/v1/auth/setup")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["configured"] is True
+    assert data["bootstrap_available"] is True
+    assert data["user_count"] == 1
+
+
+def test_auth_setup_claim_admin_succeeds(fresh_auth_db):
+    """Valid console password claims the admin and returns a working session."""
+    res = client.post("/api/v1/auth/setup/admin", json={
+        "console_password": "console_pw_123",
+        "new_username": "chief",
+        "new_password": "permanent_pw_123",
+    })
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] == "admin_claimed"
+    assert data["user"]["username"] == "chief"
+    assert data["user"]["role"] == "admin"
+    # The returned token is a working admin session
+    me = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {data['token']}"})
+    assert me.status_code == 200
+    assert me.json()["user"]["username"] == "chief"
+    # Old console password no longer works for 'admin'
+    assert client.post("/api/v1/auth/login", json={"username": "admin", "password": "console_pw_123"}).status_code == 401
+    # New credentials log in fine
+    assert client.post("/api/v1/auth/login", json={"username": "chief", "password": "permanent_pw_123"}).status_code == 200
+
+
+def test_auth_setup_claim_rejects_wrong_console_password(fresh_auth_db):
+    """Wrong console password → 401, admin stays unclaimed."""
+    res = client.post("/api/v1/auth/setup/admin", json={
+        "console_password": "totally_wrong",
+        "new_username": "chief",
+        "new_password": "permanent_pw_123",
+    })
+    assert res.status_code == 401
+    assert client.get("/api/v1/auth/setup").json()["bootstrap_available"] is True
+
+
+def test_auth_setup_claim_rejects_short_password(fresh_auth_db):
+    """New password shorter than 8 chars is rejected."""
+    res = client.post("/api/v1/auth/setup/admin", json={
+        "console_password": "console_pw_123",
+        "new_username": "chief",
+        "new_password": "short",
+    })
+    assert res.status_code == 400
+    assert "8 characters" in res.json()["detail"]
+
+
+def test_auth_setup_claim_rejects_missing_fields(fresh_auth_db):
+    """Missing new_username or new_password returns 422 (Pydantic validation)."""
+    res = client.post("/api/v1/auth/setup/admin", json={"console_password": "console_pw_123", "new_username": "chief"})
+    assert res.status_code == 422
+
+    res = client.post("/api/v1/auth/setup/admin", json={"console_password": "console_pw_123", "new_password": "long_enough_pw"})
+    assert res.status_code == 422
+
+
+def test_auth_setup_claim_rejected_once_claimed(fresh_auth_db):
+    """After claiming, the bootstrap endpoint refuses further claims (409)."""
+    res = client.post("/api/v1/auth/setup/admin", json={
+        "console_password": "console_pw_123",
+        "new_username": "chief",
+        "new_password": "permanent_pw_123",
+    })
+    assert res.status_code == 200
+
+    res = client.post("/api/v1/auth/setup/admin", json={
+        "console_password": "console_pw_123",
+        "new_username": "second",
+        "new_password": "another_pw_123",
+    })
+    assert res.status_code == 409
+    assert client.get("/api/v1/auth/setup").json()["bootstrap_available"] is False
+
 
