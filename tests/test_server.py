@@ -1767,3 +1767,57 @@ def test_backup_endpoints_require_admin(backup_env):
     res = client.post("/api/v1/backup", headers=_auth_headers(admin))
     assert res.status_code == 200
     assert res.json()["files"] >= 3
+
+
+# ----------------------------------------------------------------------
+# Auth DB encryption at rest
+# ----------------------------------------------------------------------
+
+
+def test_auth_db_usernames_not_plaintext(fresh_auth_db):
+    """The raw auth DB file must not contain plaintext usernames."""
+    import auth as auth_module
+    marker = "s3cret_username_xyz"
+    auth_module.create_user(marker, "pw_123456", "viewer")
+    raw = open(_auth_mod.AUTH_DB_PATH, "rb").read()
+    assert marker.encode() not in raw, "Username found in plaintext in the auth DB!"
+    # But login still resolves it (HMAC lookup) and shows it decrypted
+    res = client.post("/api/v1/auth/login", json={"username": marker, "password": "pw_123456"})
+    assert res.status_code == 200
+    assert res.json()["user"]["username"] == marker
+
+
+def test_auth_db_legacy_plaintext_migration(fresh_auth_db):
+    """A pre-encryption DB (plaintext usernames, no username_enc) migrates on init."""
+    import auth as auth_module
+    import sqlite3 as _sqlite3
+
+    # Simulate a legacy DB: old schema without username_enc, plaintext username
+    legacy_path = _auth_mod.AUTH_DB_PATH + ".legacy"
+    conn = _sqlite3.connect(legacy_path)
+    conn.execute(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE NOT NULL,"
+        " password_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'viewer', created_at REAL NOT NULL,"
+        " last_login REAL, is_active INTEGER NOT NULL DEFAULT 1)"
+    )
+    conn.execute(
+        "INSERT INTO users (username, password_hash, role, created_at) VALUES (?, ?, ?, ?)",
+        ("legacy_admin", auth_module._hash_password("legacy_pw_123"), "admin", 12345),
+    )
+    conn.commit()
+    conn.close()
+
+    # Point auth at the legacy DB and re-init (triggers migration)
+    orig = auth_module.AUTH_DB_PATH
+    auth_module.AUTH_DB_PATH = legacy_path
+    try:
+        auth_module.init_auth_db()
+        # Raw file no longer contains the plaintext username
+        raw = open(legacy_path, "rb").read()
+        assert b"legacy_admin" not in raw
+        # Login works and shows the decrypted username
+        user = auth_module.check_user("legacy_admin", "legacy_pw_123")
+        assert user is not None
+        assert user["username"] == "legacy_admin"
+    finally:
+        auth_module.AUTH_DB_PATH = orig

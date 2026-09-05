@@ -46,6 +46,43 @@ if not _AUTH_SECRET:
 
 SESSION_TTL = int(os.environ.get("RAGNAROK_SESSION_TTL", str(8 * 3600)))  # 8h default
 
+# ---------------------------------------------------------------------------
+# At-rest field encryption (auth DB)
+#
+# Usernames are PII: the DB stores an HMAC-SHA256 lookup key (deterministic,
+# enables login lookups without plaintext) plus a Fernet-encrypted copy for
+# display. The Fernet key is derived from RAGNAROK_AUTH_SECRET, so setting
+# that env var (recommended in production) also pins the encryption key.
+# Password hashes stay PBKDF2-salted (already safe at rest).
+# ---------------------------------------------------------------------------
+
+try:
+    from cryptography.fernet import Fernet as _Fernet, InvalidToken as _InvalidToken
+    _FERNET = _Fernet(base64.urlsafe_b64encode(
+        hashlib.sha256((_AUTH_SECRET + ":field-encryption").encode()).digest()
+    ))
+except ImportError:  # pragma: no cover - loud failure per project principles
+    raise RuntimeError(
+        "The 'cryptography' package is required for auth data encryption. "
+        "Install it with: pip install cryptography"
+    )
+
+
+def _enc_field(value: str) -> str:
+    return _FERNET.encrypt(value.encode()).decode()
+
+
+def _dec_field(token: str) -> Optional[str]:
+    try:
+        return _FERNET.decrypt(token.encode()).decode()
+    except _InvalidToken:
+        return None
+
+
+def _username_key(username: str) -> str:
+    """Deterministic lookup key: HMAC-SHA256 of the lowercased username."""
+    return hmac.new(_AUTH_SECRET.encode(), username.strip().lower().encode(), hashlib.sha256).hexdigest()
+
 
 def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(AUTH_DB_PATH)
@@ -62,6 +99,7 @@ def init_auth_db() -> None:
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT UNIQUE NOT NULL,
+                username_enc TEXT,
                 password_hash TEXT NOT NULL,
                 role TEXT NOT NULL DEFAULT 'viewer',
                 created_at REAL NOT NULL,
@@ -90,14 +128,32 @@ def init_auth_db() -> None:
             """
         )
         conn.commit()
+
+        # Migration: DBs created before field encryption lack username_enc
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
+        if "username_enc" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN username_enc TEXT")
+            conn.commit()
+        # Convert legacy plaintext usernames (username_enc IS NULL)
+        legacy = conn.execute(
+            "SELECT id, username FROM users WHERE username_enc IS NULL"
+        ).fetchall()
+        for row in legacy:
+            conn.execute(
+                "UPDATE users SET username = ?, username_enc = ? WHERE id = ?",
+                (_username_key(row["username"]), _enc_field(row["username"]), row["id"]),
+            )
+        if legacy:
+            conn.commit()
+
         # Default admin if no users exist
         row = conn.execute("SELECT COUNT(*) FROM users").fetchone()
         if row[0] == 0:
             pw = secrets.token_urlsafe(12)
             pw_hash = _hash_password(pw)
             conn.execute(
-                "INSERT INTO users (username, password_hash, role, created_at) VALUES (?, ?, ?, ?)",
-                ("admin", pw_hash, "admin", time.time()),
+                "INSERT INTO users (username, username_enc, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?)",
+                (_username_key("admin"), _enc_field("admin"), pw_hash, "admin", time.time()),
             )
             conn.commit()
             print("=" * 70)
@@ -139,8 +195,8 @@ def check_user(username: str, password: str) -> Optional[Dict[str, Any]]:
     conn = _connect()
     try:
         row = conn.execute(
-            "SELECT id, username, password_hash, role, is_active FROM users WHERE username = ?",
-            (username,),
+            "SELECT id, username, username_enc, password_hash, role, is_active FROM users WHERE username = ?",
+            (_username_key(username),),
         ).fetchone()
     finally:
         conn.close()
@@ -148,7 +204,8 @@ def check_user(username: str, password: str) -> Optional[Dict[str, Any]]:
         return None
     if not _verify_password(password, row["password_hash"]):
         return None
-    return {"id": row["id"], "username": row["username"], "role": row["role"]}
+    display = _dec_field(row["username_enc"]) if row["username_enc"] else row["username"]
+    return {"id": row["id"], "username": display, "role": row["role"]}
 
 
 def update_last_login(user_id: int) -> None:
@@ -290,7 +347,7 @@ def validate_session(token: str) -> Optional[Dict[str, Any]]:
     conn = _connect()
     try:
         row = conn.execute(
-            "SELECT s.user_id, s.expires_at, s.is_valid, u.username, u.role, u.is_active "
+            "SELECT s.user_id, s.expires_at, s.is_valid, u.username, u.username_enc, u.role, u.is_active "
             "FROM sessions s JOIN users u ON u.id = s.user_id "
             "WHERE s.token_hash = ?",
             (token_hash,),
@@ -301,7 +358,8 @@ def validate_session(token: str) -> Optional[Dict[str, Any]]:
         return None
     if row["expires_at"] < time.time():
         return None
-    return {"id": row["user_id"], "username": row["username"], "role": row["role"]}
+    display = _dec_field(row["username_enc"]) if row["username_enc"] else row["username"]
+    return {"id": row["user_id"], "username": display, "role": row["role"]}
 
 
 def destroy_session(token: str) -> None:
@@ -318,11 +376,17 @@ def list_users() -> List[Dict[str, Any]]:
     conn = _connect()
     try:
         rows = conn.execute(
-            "SELECT id, username, role, created_at, last_login, is_active FROM users ORDER BY id"
+            "SELECT id, username, username_enc, role, created_at, last_login, is_active FROM users ORDER BY id"
         ).fetchall()
     finally:
         conn.close()
-    return [dict(r) for r in rows]
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["username"] = _dec_field(r["username_enc"]) if r["username_enc"] else r["username"]
+        d.pop("username_enc", None)
+        out.append(d)
+    return out
 
 
 def create_user(username: str, password: str, role: str = "viewer") -> Optional[int]:
@@ -331,8 +395,8 @@ def create_user(username: str, password: str, role: str = "viewer") -> Optional[
     conn = _connect()
     try:
         cur = conn.execute(
-            "INSERT INTO users (username, password_hash, role, created_at) VALUES (?, ?, ?, ?)",
-            (username, _hash_password(password), role, time.time()),
+            "INSERT INTO users (username, username_enc, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?)",
+            (_username_key(username), _enc_field(username), _hash_password(password), role, time.time()),
         )
         conn.commit()
         return cur.lastrowid
@@ -426,11 +490,14 @@ def update_user_credentials(
         if new_username:
             clash = conn.execute(
                 "SELECT id FROM users WHERE username = ? AND id != ?",
-                (new_username, user_id),
+                (_username_key(new_username), user_id),
             ).fetchone()
             if clash:
                 return False
-            conn.execute("UPDATE users SET username = ? WHERE id = ?", (new_username, user_id))
+            conn.execute(
+                "UPDATE users SET username = ?, username_enc = ? WHERE id = ?",
+                (_username_key(new_username), _enc_field(new_username), user_id),
+            )
         if new_password:
             conn.execute(
                 "UPDATE users SET password_hash = ? WHERE id = ?",

@@ -182,6 +182,7 @@ Ragnarök now supports **multi-user authentication with role-based access contro
 ### How it works
 
 - **Sessions** are stored in a local SQLite database (`ragnarok_auth.db`) with hashed passwords and expiring tokens.
+- **Usernames are encrypted at rest** (Fernet, key derived from `RAGNAROK_AUTH_SECRET`); the DB stores only an HMAC lookup key and the encrypted value, so the raw DB file leaks no usernames. Pre-encryption databases are migrated automatically on startup.
 - **Bearer tokens** are obtained via `POST /api/v1/auth/login` and sent as `Authorization: Bearer <token>`.
 - **API key** (`X-API-Key`) still works on all protected endpoints for non-interactive scripts. When a Bearer token is present, it takes precedence.
 - A **default admin** is created on first startup (random password printed to console).
