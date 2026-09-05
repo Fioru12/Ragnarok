@@ -102,6 +102,24 @@ button.secondary{background:#475569}
     <div id="scoreDetails" style="margin-top:0.75rem;font-size:0.8125rem;color:#94a3b8;"></div>
   </div>
 
+  <div class="section" id="setupWizard" style="display:none;border-color:#f59e0b">
+    <h2>&#9888;&#65039; Configurazione iniziale — Rivendica l'account admin</h2>
+    <p style="font-size:0.8125rem;color:#94a3b8;margin-bottom:0.75rem">
+      Al primo avvio il server ha creato l'utente <code>admin</code> con una password casuale stampata nella
+      console del server. Inseriscila qui insieme alle credenziali permanenti che vuoi usare d'ora in poi.
+      Questa procedura &egrave; disponibile una sola volta.
+    </p>
+    <div class="row" style="flex-direction:column;gap:0.5rem;align-items:stretch">
+      <input type="password" id="suConsolePw" placeholder="Password della console (stampata al primo avvio)" style="width:100%">
+      <input type="text" id="suNewUser" placeholder="Nuovo username admin" style="width:100%">
+      <input type="password" id="suNewPw" placeholder="Nuova password (min 8 caratteri)" style="width:100%">
+    </div>
+    <div class="row" style="margin-top:0.75rem">
+      <button onclick="claimAdmin()">&#128274; Rivendica admin</button>
+    </div>
+    <div id="suRes" style="margin-top:0.5rem"></div>
+  </div>
+  <div class="grid" id="statGrid"></div>
   <div class="grid" id="statGrid"></div>
   <div class="section">
     <h2>&#128200; Storico Alert</h2>
@@ -173,6 +191,35 @@ function saveBlob(blob,fn){
   setTimeout(function(){URL.revokeObjectURL(url);a.remove()},200);
 }
 function saveText(text,fn,mime){saveBlob(new Blob([text],{type:mime||'text/plain;charset=utf-8'}),fn)}
+
+// --- Setup wizard: mostra il form solo se l'admin di default non è stato ancora rivendicato ---
+async function checkSetup(){
+  try{
+    var s=await g('/api/v1/auth/setup');
+    if(s&&s.bootstrap_available){document.getElementById('setupWizard').style.display='block';}
+  }catch(e){/* server non raggiungibile: nessun wizard */}
+}
+async function claimAdmin(){
+  var res=document.getElementById('suRes');
+  var body={
+    console_password:document.getElementById('suConsolePw').value,
+    new_username:document.getElementById('suNewUser').value,
+    new_password:document.getElementById('suNewPw').value
+  };
+  if(!body.console_password||!body.new_username||!body.new_password){res.innerHTML='<span style="color:#f87171">Compila tutti i campi.</span>';return;}
+  if(body.new_password.length<8){res.innerHTML='<span style="color:#f87171">La nuova password deve avere almeno 8 caratteri.</span>';return;}
+  try{
+    var r=await fetch('/api/v1/auth/setup/admin',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    var d=await r.json();
+    if(r.ok){
+      res.innerHTML='<span style="color:#4ade80">&#10003; Admin <b>'+esc(d.user.username)+'</b> rivendicato. Ora usa queste credenziali per il login (l\'utente <code>admin</code> non esiste pi&ugrave;).</span>';
+      document.getElementById('setupWizard').style.border='1px solid #4ade80';
+    }else{
+      res.innerHTML='<span style="color:#f87171">'+esc(d.detail||('Errore '+r.status))+'</span>';
+    }
+  }catch(e){res.innerHTML='<span style="color:#f87171">Errore di rete: '+esc(e)+'</span>';}
+}
+checkSetup();
 function dlPdf(){
   if(!K){expMsg('<div class="empty" style="color:#ef4444">Nessuna API key configurata. Impostala nel pannello di setup.</div>');return}
   authed('/api/v1/rag/report/pdf').then(function(r){
@@ -270,7 +317,6 @@ function computeScore(s){
   if(cov.rag)details+='<span style="color:#4ade80">• RAG ✅</span> ';
   if(!details)details='<span style="color:#94a3b4">Completa l\'indicizzazione per aumentare il punteggio</span>';
   sd.innerHTML=details;
-}
 }
 async function runQ(){
   var q=document.getElementById('q').value.trim();
