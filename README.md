@@ -16,24 +16,23 @@
 
 ## Screenshots
 
-> **TODO (author)**: capture and drop these images into `docs/screenshots/`, then the table below renders as-is. Suggested capture: run `npm run tauri dev`, use a realistic demo dataset, crop the window.
+> Need to capture these? See the [screenshot capture guide](docs/screenshots/README.md).
 
-| # | Screenshot | What to capture | File |
-|---|-----------|-----------------|------|
-| 1 | Command center | Overview tab with module health dots green and telemetry chart alive | `docs/screenshots/overview.png` |
-| 2 | AI assistant | A chat exchange proposing an action with the confirmation prompt visible | `docs/screenshots/ai-assistant.png` |
-| 3 | RAG dashboard | `/dashboard` with KPIs, security score and timeline populated | `docs/screenshots/rag-dashboard.png` |
-| 4 | RBAC | Sidebar account block logged in as an admin (badge visible) | `docs/screenshots/rbac-account.png` |
+| # | Screenshot | What to capture |
+|---|-----------|-----------------|
+| 1 | **Command center** | Overview tab with module health dots green and telemetry chart alive |
+| 2 | **AI assistant** | Chat exchange with an action proposal and the confirmation prompt visible |
+| 3 | **RAG dashboard** | `/dashboard` with KPIs, security score and timeline populated |
+| 4 | **RBAC** | Sidebar account block logged in as admin (badge visible) |
 
-```html
-<!-- Uncomment once the images exist:
 <p align="center">
   <img src="docs/screenshots/overview.png" width="45%" alt="Command center" />
   <img src="docs/screenshots/ai-assistant.png" width="45%" alt="AI assistant" />
+</p>
+<p align="center">
   <img src="docs/screenshots/rag-dashboard.png" width="45%" alt="RAG dashboard" />
   <img src="docs/screenshots/rbac-account.png" width="45%" alt="RBAC account" />
 </p>
--->
 
 
 ---
