@@ -260,6 +260,13 @@ Every persistent store (auth DB, audit trail, RAG vector index, conversation mem
 
 Every authenticated action (login, query, export, execute, user management) is recorded with: user, action, timestamp, success/failure. Query via `GET /api/v1/audit-log` (admin-only).
 
+### Security hardening
+
+- **Security headers** on every response: `X-Frame-Options: SAMEORIGIN`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `Content-Security-Policy` (dashboard only), `Strict-Transport-Security` (when TLS is enabled)
+- **Login brute-force protection**: 5 failed attempts lock the account for 300s (configurable via `RAGNAROK_LOGIN_MAX_ATTEMPTS` and `RAGNAROK_LOCKOUT_SECONDS`)
+- **Global rate limiting**: 300 req/min per IP by default (configurable via `RAGNAROK_RATE_LIMIT_MAX` and `RAGNAROK_RATE_LIMIT_WINDOW`)
+- **CORS**: restricted to known-good origins (Tauri webview + localhost dev); wildcard is never used with credentials
+
 ---
 
 <div align="center">

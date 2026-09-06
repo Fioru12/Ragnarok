@@ -1875,3 +1875,93 @@ def test_tls_disabled_by_default():
     finally:
         if saved is not None:
             os.environ["ASGARD_TLS"] = saved
+
+
+# ----------------------------------------------------------------------
+# Security headers & rate limiting tests
+# ----------------------------------------------------------------------
+
+
+def test_security_headers_present_on_health():
+    """Every response carries the core security headers."""
+    res = client.get("/health")
+    assert res.status_code == 200
+    assert res.headers.get("X-Frame-Options") == "SAMEORIGIN"
+    assert res.headers.get("X-Content-Type-Options") == "nosniff"
+    assert res.headers.get("Referrer-Policy") == "strict-origin-when-cross-origin"
+
+
+def test_security_headers_hsts_not_present_when_tls_disabled():
+    """HSTS header is absent when TLS is not enabled."""
+    saved = os.environ.pop("ASGARD_TLS", None)
+    try:
+        res = client.get("/health")
+        assert "Strict-Transport-Security" not in res.headers
+    finally:
+        if saved is not None:
+            os.environ["ASGARD_TLS"] = saved
+
+
+def test_security_headers_hsts_present_when_tls_enabled():
+    """HSTS header is present when ASGARD_TLS=true."""
+    saved = os.environ.get("ASGARD_TLS")
+    os.environ["ASGARD_TLS"] = "true"
+    try:
+        res = client.get("/health")
+        assert "Strict-Transport-Security" in res.headers
+        assert "max-age=31536000" in res.headers["Strict-Transport-Security"]
+    finally:
+        if saved is not None:
+            os.environ["ASGARD_TLS"] = saved
+        else:
+            os.environ.pop("ASGARD_TLS", None)
+
+
+def test_csp_header_on_dashboard():
+    """Dashboard response includes Content-Security-Policy."""
+    res = client.get("/dashboard")
+    assert res.status_code == 200
+    csp = res.headers.get("Content-Security-Policy", "")
+    assert "default-src 'self'" in csp
+    assert "script-src 'self'" in csp
+
+
+def test_csp_header_not_on_api():
+    """API endpoints do not carry the dashboard CSP."""
+    res = client.get("/health")
+    # Health is not the dashboard, so CSP should be absent
+    assert "Content-Security-Policy" not in res.headers
+
+
+def test_rate_limit_allows_normal_traffic():
+    """Normal traffic (under the limit) is not blocked."""
+    # The limit is 300/min by default; a handful of requests is fine
+    for _ in range(5):
+        res = client.get("/health")
+        assert res.status_code == 200
+
+
+def test_rate_limit_blocks_excessive_traffic():
+    """Excessive requests from one IP trigger a 429."""
+    # Reset rate limit state from prior tests (all share 127.0.0.1)
+    from server import _rate_limit_store
+    _rate_limit_store.clear()
+    # Set a low limit for this test
+    saved_max = os.environ.get("RAGNAROK_RATE_LIMIT_MAX")
+    os.environ["RAGNAROK_RATE_LIMIT_MAX"] = "3"
+    headers = {"User-Agent": "pytest-rate-limit/1.0"}
+    try:
+        # First 3 requests pass
+        for _ in range(3):
+            res = client.get("/health", headers=headers)
+            assert res.status_code == 200
+        # 4th request is blocked
+        res = client.get("/health", headers=headers)
+        assert res.status_code == 429
+        assert "rate_limit_exceeded" in res.text
+    finally:
+        if saved_max is not None:
+            os.environ["RAGNAROK_RATE_LIMIT_MAX"] = saved_max
+        else:
+            os.environ.pop("RAGNAROK_RATE_LIMIT_MAX", None)
+

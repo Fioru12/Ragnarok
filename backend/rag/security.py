@@ -164,6 +164,64 @@ class SecurityAuditor:
 
         return []
 
+    def audit_security_headers(self) -> List[Dict[str, Any]]:
+        """Verify security headers are present on API responses.
+
+        Checks X-Frame-Options, X-Content-Type-Options, Referrer-Policy,
+        and (when TLS is enabled) Strict-Transport-Security.
+        """
+        try:
+            import urllib.request
+            port = os.environ.get("RAGNAROK_PORT", "8000")
+            url = f"http://127.0.0.1:{port}/health"
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req, timeout=2) as resp:
+                headers = dict(resp.headers)
+        except Exception as e:
+            self._add(
+                LOW, "security_headers",
+                "Impossibile verificare gli header di sicurezza",
+                f"La richiesta al health endpoint ha fallito: {e}",
+                "Verifica che il server sia in esecuzione durante l'audit."
+            )
+            return []
+
+        required = {
+            "X-Frame-Options": ("SAMEORIGIN", "Header anti-clickjacking mancante"),
+            "X-Content-Type-Options": ("nosniff", "Header anti-MIME-sniffing mancante"),
+            "Referrer-Policy": ("strict-origin-when-cross-origin", "Header referrer mancante"),
+        }
+
+        for header, (expected, msg) in required.items():
+            actual = headers.get(header)
+            if actual is None:
+                self._add(
+                    MEDIUM, "security_headers",
+                    f"Header {header} mancante",
+                    msg,
+                    f"Aggiungi '{header}: {expected}' al middleware di sicurezza."
+                )
+            elif actual.lower() != expected.lower():
+                self._add(
+                    MEDIUM, "security_headers",
+                    f"Header {header} non corretto",
+                    f"Valore atteso: '{expected}', valore ricevuto: '{actual}'",
+                    f"Correggi il valore dell'header."
+                )
+
+        # HSTS check only when TLS is enabled
+        if os.environ.get("ASGARD_TLS", "false").lower() in ("true", "1", "yes"):
+            hsts = headers.get("Strict-Transport-Security")
+            if hsts is None:
+                self._add(
+                    HIGH, "security_headers",
+                    "Header Strict-Transport-Security mancante",
+                    "HSTS nonostante ASGARD_TLS=true",
+                    "Aggiungi Strict-Transport-Security ai rispondi HTTPS."
+                )
+
+        return []
+
     def run_full_audit(self) -> Dict[str, Any]:
         """Esegue tutti gli audit e restituisce il report."""
         self.findings = []
@@ -172,6 +230,7 @@ class SecurityAuditor:
         self.audit_encryption()
         self.audit_data_retention()
         self.audit_network_exposure()
+        self.audit_security_headers()
 
         # Calcolo score (0-100)
         score = 100

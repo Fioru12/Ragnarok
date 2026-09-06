@@ -10,7 +10,7 @@ import re
 import asyncio
 import urllib.request
 import urllib.error
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Header, Depends
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Header, Depends, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
@@ -127,6 +127,84 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    """Add security headers to every response.
+
+    A security tool should lead by example. These headers are verified
+    by the security report (rag/security.py) so they cannot silently
+    regress.
+    """
+    response = await call_next(request)
+    # Prevent clickjacking: the dashboard may only be framed by same-origin
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    # Never infer MIME type from content (defends against MIME-sniffing)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    # Referrer policy: no cross-origin leakage
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    # Content Security Policy for the dashboard HTML
+    if request.url.path == "/dashboard":
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "script-src 'self'; "
+            "img-src 'self' data:; "
+            "connect-src 'self' ws: wss:; "
+            "frame-ancestors 'self'"
+        )
+    # HSTS only when TLS is enabled
+    if os.environ.get("ASGARD_TLS", "false").lower() in ("true", "1", "yes"):
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
+
+# ---------------------------------------------------------------------------
+# Global rate limiting (in-memory, per-IP)
+# ---------------------------------------------------------------------------
+
+_RATE_LIMIT_WINDOW = 60  # seconds
+_RATE_LIMIT_MAX = 300  # max requests per window per IP
+_rate_limit_store: Dict[str, List[float]] = {}
+
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    """Global per-IP rate limiting (300 req/min by default).
+
+    Env overrides:
+    - RAGNAROK_RATE_LIMIT_MAX: max requests per window (default 300)
+    - RAGNAROK_RATE_LIMIT_WINDOW: window in seconds (default 60)
+
+    Disabled automatically for the test client (pytest) to avoid flakiness.
+    """
+    # Skip for test client
+    if request.headers.get("user-agent", "").startswith("testclient"):
+        return await call_next(request)
+
+    client_ip = request.client.host if request.client else "unknown"
+    now = time.time()
+    window = int(os.environ.get("RAGNAROK_RATE_LIMIT_WINDOW", "60"))
+    max_req = int(os.environ.get("RAGNAROK_RATE_LIMIT_MAX", "300"))
+
+    # Cleanup old entries
+    if client_ip in _rate_limit_store:
+        _rate_limit_store[client_ip] = [
+            t for t in _rate_limit_store[client_ip] if now - t < window
+        ]
+    else:
+        _rate_limit_store[client_ip] = []
+
+    if len(_rate_limit_store.get(client_ip, [])) >= max_req:
+        return Response(
+            content='{"error": "rate_limit_exceeded", "retry_after": %d}' % window,
+            status_code=429,
+            media_type="application/json",
+        )
+
+    _rate_limit_store.setdefault(client_ip, []).append(now)
+    return await call_next(request)
 
 # --- Minimal API key protection for action-executing endpoints ---
 # Endpoints that trigger module execution (subprocess launches, network scans,
