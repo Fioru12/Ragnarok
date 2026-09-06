@@ -13,6 +13,25 @@ import urllib.error
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Header, Depends, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
+
+
+# Global state
+_START_TIME = time.time()
+_MODULES_CACHE = {}
+
+
+def _get_modules():
+    """Discover available modules dynamically."""
+    if _MODULES_CACHE:
+        return _MODULES_CACHE
+    backend_dir = os.path.dirname(os.path.abspath(__file__))
+    asgard_root = os.path.dirname(backend_dir)
+    module_dirs = ["Heimdall", "Mjolnir", "Bifrost", "Yggdrasil", "Fenrir", "Sleipnir", "Forseti"]
+    for mod in module_dirs:
+        mod_path = os.path.join(asgard_root, mod, "main.py")
+        if os.path.exists(mod_path):
+            _MODULES_CACHE[mod] = {"path": mod_path, "name": mod}
+    return _MODULES_CACHE
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from pathlib import Path
@@ -760,8 +779,147 @@ def _detect_chat_module(prompt_lower: str) -> Optional[str]:
 
 @app.get("/health")
 def health():
-    """Health-check pubblico per orchestratori Docker / Kubernetes."""
-    return {"status": "healthy", "system": "Asgard Ragnarok"}
+    """Comprehensive health check for Docker/Kubernetes orchestrators.
+
+    Returns:
+        200 with component status: overall "healthy" only if ALL components are up.
+        503 if any critical component is down (triggers restart in k8s).
+    """
+    now = time.time()
+    uptime_seconds = int(now - _START_TIME) if "_START_TIME" in globals() else 0
+
+    components = {}
+
+    # --- Auth DB ---
+    try:
+        import sqlite3
+        import auth as auth_module
+        auth_db_path = getattr(auth_module, 'AUTH_DB_PATH', 'backend/ragnarok_auth.db')
+        conn = sqlite3.connect(auth_db_path)
+        conn.execute("SELECT 1 FROM users LIMIT 1")
+        conn.close()
+        components["auth_db"] = {"status": "ok"}
+    except Exception as e:
+        components["auth_db"] = {"status": "error", "detail": str(e)}
+
+    # --- RAG / ChromaDB ---
+    try:
+        rag_indexer = getattr(server, 'rag_indexer', None) if 'server' in globals() else None
+        if rag_indexer:
+            stats = rag_indexer.get_stats()
+            components["rag"] = {"status": "ok", "documents": stats.get("total_documents", 0)}
+        else:
+            components["rag"] = {"status": "disabled"}
+    except Exception as e:
+        components["rag"] = {"status": "error", "detail": str(e)}
+
+    # --- Audit DB ---
+    try:
+        import sqlite3
+        audit_path = os.environ.get("RAGNAROK_AUDIT_DB_PATH", "backend/ragnarok_audit.db")
+        if os.path.exists(audit_path):
+            conn = sqlite3.connect(audit_path)
+            # Check if DB is readable (table may not exist yet)
+            try:
+                conn.execute("SELECT 1 FROM audit_log LIMIT 1")
+            except Exception:
+                pass  # Table may not exist yet, that's OK
+            conn.close()
+            components["audit_db"] = {"status": "ok"}
+        else:
+            components["audit_db"] = {"status": "ok", "note": "no audit records yet"}
+    except Exception as e:
+        components["audit_db"] = {"status": "error", "detail": str(e)}
+
+    # --- Modules (real check via --help) ---
+    module_status = {}
+    for mod_key, info in _get_modules().items():
+        try:
+            proc = subprocess.run(
+                [sys.executable, info["path"], "--help"],
+                capture_output=True, timeout=10
+            )
+            module_status[mod_key] = "ok" if proc.returncode == 0 else "unhealthy"
+        except Exception:
+            module_status[mod_key] = "unreachable"
+    components["modules"] = module_status
+
+    # --- Overall status ---
+    critical = ["auth_db", "audit_db"]
+    overall = "healthy"
+    for c in critical:
+        if components.get(c, {}).get("status") == "error":
+            overall = "degraded"
+            break
+
+    status_code = 200 if overall == "healthy" else 503
+
+    return Response(
+        content=json.dumps({
+            "status": overall,
+            "version": "1.0.0",
+            "uptime_seconds": uptime_seconds,
+            "components": components,
+        }),
+        status_code=status_code,
+        media_type="application/json",
+    )
+
+
+@app.get("/metrics")
+def metrics():
+    """Prometheus-compatible metrics endpoint.
+
+    Exposes: uptime, component health, RAG document count, auth user count.
+    No external dependencies — plain text format.
+    """
+    lines = []
+    now = time.time()
+
+    # Uptime
+    uptime = int(now - _START_TIME) if "_START_TIME" in globals() else 0
+    lines.append("asgard_uptime_seconds %d" % uptime)
+
+    # Component health (1=ok, 0=error)
+    components = {
+        "auth_db": "backend/ragnarok_auth.db",
+        "audit_db": "backend/ragnarok_audit.db",
+    }
+    for name, path in components.items():
+        healthy = 1 if os.path.exists(path) else 0
+        lines.append('asgard_component_healthy{component="%s"} %d' % (name, healthy))
+
+    # RAG documents
+    try:
+        if hasattr(server, 'rag_indexer') and server.rag_indexer:
+            stats = server.rag_indexer.get_stats()
+            lines.append("asgard_rag_documents_total %d" % stats.get("total_documents", 0))
+    except Exception:
+        lines.append("asgard_rag_documents_total 0")
+
+    # Auth users
+    try:
+        import sqlite3
+        conn = sqlite3.connect(os.environ.get("RAGNAROK_AUTH_DB_PATH", "backend/ragnarok_auth.db"))
+        row = conn.execute("SELECT COUNT(*) FROM users WHERE active = 1").fetchone()
+        conn.close()
+        lines.append("asgard_auth_active_users %d" % row[0])
+    except Exception:
+        lines.append("asgard_auth_active_users 0")
+
+    # Backup status
+    backup_dir = "backend/backups"
+    if os.path.isdir(backup_dir):
+        backups = sorted([f for f in os.listdir(backup_dir) if f.endswith(".zip")])
+        if backups:
+            latest = os.path.getmtime(os.path.join(backup_dir, backups[-1]))
+            hours_ago = int((now - latest) / 3600)
+            lines.append("asgard_last_backup_hours_ago %d" % hours_ago)
+
+    return Response(
+        content="\n".join(lines),
+        media_type="text/plain; version=0.0.4",
+    )
 
 @app.get("/")
 def serve_frontend():

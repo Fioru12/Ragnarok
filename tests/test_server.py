@@ -1965,3 +1965,70 @@ def test_rate_limit_blocks_excessive_traffic():
         else:
             os.environ.pop("RAGNAROK_RATE_LIMIT_MAX", None)
 
+
+# ----------------------------------------------------------------------
+# Health & Metrics tests
+# ----------------------------------------------------------------------
+
+
+def test_health_endpoint_returns_200():
+    """Health endpoint returns 200 with component status."""
+    # Restore auth DB path (previous tests may have monkeypatched it)
+    import auth as auth_module
+    auth_module.AUTH_DB_PATH = str(Path("backend/ragnarok_auth.db").resolve())
+    res = client.get("/health")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] in ("healthy", "degraded")
+    assert "components" in data
+    assert "auth_db" in data["components"]
+    assert "version" in data
+
+
+def test_health_reports_degraded_when_auth_db_missing():
+    """Health returns 503 when a critical component is down."""
+    import auth as auth_module
+    original = auth_module.AUTH_DB_PATH
+    auth_module.AUTH_DB_PATH = "/nonexistent/path/auth.db"
+    try:
+        res = client.get("/health")
+        assert res.status_code == 503
+        data = res.json()
+        assert data["status"] == "degraded"
+        assert data["components"]["auth_db"]["status"] == "error"
+    finally:
+        auth_module.AUTH_DB_PATH = original
+
+
+def test_metrics_endpoint_returns_prometheus_format():
+    """Metrics endpoint returns Prometheus-compatible text."""
+    res = client.get("/metrics")
+    assert res.status_code == 200
+    assert "text/plain" in res.headers["content-type"]
+    body = res.text
+    assert "asgard_uptime_seconds" in body
+    assert "asgard_component_healthy" in body
+    assert "asgard_auth_active_users" in body
+
+
+def test_metrics_expose_rag_documents():
+    """Metrics include RAG document count."""
+    res = client.get("/metrics")
+    assert "asgard_rag_documents_total" in res.text
+
+
+def test_metrics_expose_backup_age():
+    """Metrics include backup age when backups exist."""
+    # Create a fake backup
+    backup_dir = "backend/backups"
+    os.makedirs(backup_dir, exist_ok=True)
+    backup_path = os.path.join(backup_dir, "test_backup.zip")
+    with open(backup_path, "w") as f:
+        f.write("test")
+    try:
+        res = client.get("/metrics")
+        assert "asgard_last_backup_hours_ago" in res.text
+    finally:
+        if os.path.exists(backup_path):
+            os.remove(backup_path)
+
