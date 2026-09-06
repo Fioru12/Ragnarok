@@ -221,6 +221,8 @@ Ragnarök now supports **multi-user authentication with role-based access contro
 | `ASGARD_TLS` | `false` | Enable HTTPS (`true` for self-signed cert) |
 | `ASGARD_TLS_CERTFILE` | — | Path to TLS certificate (optional, enables HTTPS) |
 | `ASGARD_TLS_KEYFILE` | — | Path to TLS private key (optional, enables HTTPS) |
+| `RAGNAROK_RATE_LIMIT_MAX` | `300` | Max requests per window per IP |
+| `RAGNAROK_RATE_LIMIT_WINDOW` | `60` | Rate limit window in seconds |
 
 ### TLS
 
@@ -250,6 +252,8 @@ Self-signed certificates are written to `.tls/` (git-ignored). To use the HTTPS 
 | `/api/v1/backup` | POST | Admin | Create a verified backup of all persistent state |
 | `/api/v1/backup/verify` | POST | Admin | Verify a backup archive against its sha256 manifest |
 | `/api/v1/backup/restore` | POST | Admin | Verify + restore a backup to the live stores |
+| `/health` | GET | — | Health check for Docker/Kubernetes (200 healthy, 503 degraded) |
+| `/metrics` | GET | — | Prometheus-compatible metrics (uptime, components, RAG docs, auth users) |
 
 ### Backup & restore
 
@@ -258,6 +262,22 @@ Every persistent store (auth DB, audit trail, RAG vector index, conversation mem
 ### Audit log
 
 Every authenticated action (login, query, export, execute, user management) is recorded with: user, action, timestamp, success/failure. Query via `GET /api/v1/audit-log` (admin-only).
+
+### Health & Metrics
+
+For Docker/Kubernetes orchestrators:
+
+- **`GET /health`** — comprehensive component check:
+  - `200` with `"status": "healthy"` when all critical components (auth DB, audit DB) are up
+  - `503` with `"status": "degraded"` when any critical component is down (triggers k8s restart)
+  - Returns per-component status (auth_db, audit_db, rag, modules), version, uptime
+
+- **`GET /metrics`** — Prometheus-compatible text metrics:
+  - `asgard_uptime_seconds`
+  - `asgard_component_healthy{name="..."}`
+  - `asgard_rag_documents_total`
+  - `asgard_auth_active_users`
+  - `asgard_backups_total`
 
 ### Security hardening
 
