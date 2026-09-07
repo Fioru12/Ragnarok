@@ -22,3 +22,14 @@ def test_bifrost_topology_endpoint():
     assert "nodes" in data
     assert "edges" in data
     assert len(data["nodes"]) >= 3
+
+def test_report_read_blocks_path_traversal():
+    # Attempt to read sensitive file outside authorized report directories
+    res = client.get("/api/v1/reports/read", params={"path": "../../package_release.py"})
+    assert res.status_code == 403
+    assert "Access denied" in res.json()["detail"]
+
+    # Attempt to read non-existent system file
+    res = client.get("/api/v1/reports/read", params={"path": "C:\\Windows\\win.ini"})
+    assert res.status_code == 403
+

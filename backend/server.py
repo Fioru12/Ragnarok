@@ -1164,11 +1164,32 @@ def list_reports():
 
 @app.get("/api/v1/reports/read")
 def read_report(path: str):
-    if not os.path.isfile(path):
+    allowed_dirs = [
+        os.path.realpath(os.path.join(ASGARD_ROOT, "Mjolnir", "output")),
+        os.path.realpath(os.path.join(ASGARD_ROOT, "Yggdrasil", "reports")),
+        os.path.realpath(os.path.join(ASGARD_ROOT, "reports")),
+        os.path.realpath(os.path.join(ASGARD_ROOT, "output")),
+    ]
+    resolved_path = os.path.realpath(os.path.abspath(path))
+    
+    # Path traversal protection: ensure path is strictly inside one of the allowed report directories
+    is_safe = False
+    for ad in allowed_dirs:
+        try:
+            if os.path.commonpath([resolved_path, ad]) == ad:
+                is_safe = True
+                break
+        except ValueError:
+            continue
+
+    if not is_safe:
+        raise HTTPException(status_code=403, detail="Access denied: report path must be inside authorized report directories")
+
+    if not os.path.isfile(resolved_path):
         raise HTTPException(status_code=404, detail="Report not found")
-    with open(path, "r", encoding="utf-8") as f:
+    with open(resolved_path, "r", encoding="utf-8", errors="replace") as f:
         content = f.read()
-    return {"filename": os.path.basename(path), "content": content}
+    return {"filename": os.path.basename(resolved_path), "content": content}
 
 @app.get("/api/v1/hunt")
 def threat_hunt(q: Optional[str] = ""):
