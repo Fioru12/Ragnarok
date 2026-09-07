@@ -12,7 +12,7 @@ Principi GDPR verificati:
 - Privacy by design (art. 25): protezione fin dalla progettazione
 """
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 
 logger = logging.getLogger("Asgard.RAG.GDPR")
@@ -108,7 +108,7 @@ class GDPRComplianceChecker:
 
     def generate_privacy_report(self, checklist_answers: Optional[Dict[str, bool]] = None, company_size: str = "small") -> Dict[str, Any]:
         return {
-            "generated_at": datetime.utcnow().isoformat(),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
             "gdpr_evaluation": self.evaluate_checklist(checklist_answers or {}),
             "agent_recommendations": self.recommend_agents(company_size),
             "data_retention": self.check_data_retention(),

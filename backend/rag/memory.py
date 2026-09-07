@@ -1,5 +1,5 @@
 import os, sqlite3, json, logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Optional
 from . import get_db_path
 logger = logging.getLogger('Asgard.RAG.Memory')
@@ -20,7 +20,7 @@ class ConversationMemory:
 
     def add(self, session_id, role, content, metadata=None):
         conn = sqlite3.connect(self.db_path)
-        conn.execute('INSERT INTO conversation_memory (session_id, role, content, metadata, timestamp) VALUES (?, ?, ?, ?, ?)', (session_id, role, content, json.dumps(metadata) if metadata else None, datetime.utcnow().isoformat()))
+        conn.execute('INSERT INTO conversation_memory (session_id, role, content, metadata, timestamp) VALUES (?, ?, ?, ?, ?)', (session_id, role, content, json.dumps(metadata) if metadata else None, datetime.now(timezone.utc).isoformat()))
         conn.commit()
         conn.close()
 

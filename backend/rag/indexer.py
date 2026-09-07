@@ -1,5 +1,5 @@
 import os, sqlite3, logging, glob
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict
 import chromadb
 import numpy as np
@@ -28,18 +28,22 @@ class AsgardIndexer:
         self.asgard_root = asgard_root or os.environ.get('ASGARD_ROOT', str(pathlib.Path(__file__).parent.parent.parent.parent))
         self.db_path = db_path or get_db_path()
         os.makedirs(self.db_path, exist_ok=True)
-        self.client = chromadb.PersistentClient(path=self.db_path, settings=Settings(anonymized_telemetry=False))
-        self.embedding_fn = FastEmbedAdapter()
+        self.client = chromadb.PersistentClient(
+            path=self.db_path,
+            settings=Settings(anonymized_telemetry=False)
+        )
+        self.ef = FastEmbedAdapter()
 
-    def _get_or_create(self, name):
-        return self.client.get_or_create_collection(name=name, embedding_function=self.embedding_fn, metadata={'hnsw:space': 'cosine'})
-
-    def _reset_collection(self, name):
-        col = self._get_or_create(name)
-        if col.count() > 0:
+    def _reset_collection(self, name: str):
+        try:
             self.client.delete_collection(name)
-            col = self._get_or_create(name)
-        return col
+        except Exception:
+            pass
+        return self.client.get_or_create_collection(
+            name=name,
+            embedding_function=self.ef,
+            metadata={'hnsw:space': 'cosine'}
+        )
 
     def index_heimdall(self, db_path=None):
         if db_path is None:
@@ -51,11 +55,15 @@ class AsgardIndexer:
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='alerts'")
+        if not cur.fetchone():
+            conn.close()
+            return 0
         for row in cur.execute('SELECT * FROM alerts ORDER BY id'):
             row = dict(row)
             doc_id = 'alert-' + str(row.get('id', count))
             text = 'Alert: ' + str(row.get('rule_title', 'Unknown')) + '. Severity: ' + str(row.get('severity', 'unknown')) + '. Source IP: ' + str(row.get('source_ip', 'N/A')) + '. Action: ' + str(row.get('action_taken', 'none')) + '. Count: ' + str(row.get('count', 1)) + '.'
-            collection.add(ids=[doc_id], documents=[text], metadatas=[{'source': 'heimdall', 'type': 'alert', 'severity': row.get('severity', 'unknown'), 'source_ip': row.get('source_ip', 'N/A'), 'timestamp': row.get('timestamp', ''), 'action': row.get('action_taken', '')}])
+            collection.add(ids=[doc_id], documents=[text], metadatas=[{'source': 'heimdall', 'type': 'alert', 'severity': str(row.get('severity', 'unknown')), 'source_ip': str(row.get('source_ip', 'N/A')), 'timestamp': str(row.get('timestamp', '')), 'action': str(row.get('action_taken', ''))}])
             count += 1
         conn.close()
         return count
@@ -70,11 +78,24 @@ class AsgardIndexer:
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
-        for row in cur.execute('SELECT * FROM ioc ORDER BY id'):
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('ioc', 'iocs')")
+        tbl = cur.fetchone()
+        if not tbl:
+            conn.close()
+            return 0
+        table_name = tbl[0]
+
+        for row in cur.execute(f'SELECT * FROM {table_name} ORDER BY id'):
             row = dict(row)
             doc_id = 'ioc-' + str(row.get('id', count))
-            text = 'IOC: ' + str(row.get('value', 'unknown')) + '. Tipo: ' + str(row.get('type', 'unknown')) + '. Fonte: ' + str(row.get('source', 'unknown')) + '. CVE: ' + str(row.get('cve_id', 'N/A')) + '. Threat: ' + str(row.get('threat_type', 'N/A')) + '.'
-            collection.add(ids=[doc_id], documents=[text], metadatas=[{'source': 'fenrir', 'type': 'ioc', 'ioc_value': row.get('value', ''), 'ioc_type': row.get('type', ''), 'ioc_source': row.get('source', ''), 'cve_id': row.get('cve_id', ''), 'threat_type': row.get('threat_type', ''), 'timestamp': row.get('timestamp', '')}])
+            val = row.get('value') or row.get('indicator') or 'unknown'
+            typ = row.get('type') or row.get('indicator_type') or 'unknown'
+            src = row.get('source') or 'unknown'
+            cve = row.get('cve_id') or 'N/A'
+            threat = row.get('threat_type') or 'N/A'
+            sev = row.get('severity') or 'unknown'
+            text = f"IOC: {val}. Tipo: {typ}. Fonte: {src}. CVE: {cve}. Threat: {threat}."
+            collection.add(ids=[doc_id], documents=[text], metadatas=[{'source': 'fenrir', 'type': 'ioc', 'ioc_value': str(val), 'ioc_type': str(typ), 'ioc_source': str(src), 'cve_id': str(cve), 'threat_type': str(threat), 'timestamp': str(row.get('timestamp', ''))}])
             count += 1
         conn.close()
         return count
@@ -90,7 +111,7 @@ class AsgardIndexer:
             doc_id = 'triage-' + os.path.basename(md_file)
             with open(md_file, 'r', encoding='utf-8') as f:
                 content = f.read()[:4000]
-            collection.add(ids=[doc_id], documents=[content], metadatas=[{'source': 'mjolnir', 'type': 'triage_report', 'filename': os.path.basename(md_file), 'indexed_at': datetime.utcnow().isoformat()}])
+            collection.add(ids=[doc_id], documents=[content], metadatas=[{'source': 'mjolnir', 'type': 'triage_report', 'filename': os.path.basename(md_file), 'indexed_at': datetime.now(timezone.utc).isoformat()}])
             count += 1
         return count
 
@@ -105,7 +126,7 @@ class AsgardIndexer:
             doc_id = 'scan-' + os.path.basename(md_file)
             with open(md_file, 'r', encoding='utf-8') as f:
                 content = f.read()[:4000]
-            collection.add(ids=[doc_id], documents=[content], metadatas=[{'source': 'bifrost', 'type': 'scan_report', 'filename': os.path.basename(md_file), 'indexed_at': datetime.utcnow().isoformat()}])
+            collection.add(ids=[doc_id], documents=[content], metadatas=[{'source': 'bifrost', 'type': 'scan_report', 'filename': os.path.basename(md_file), 'indexed_at': datetime.now(timezone.utc).isoformat()}])
             count += 1
         return count
 
@@ -120,7 +141,7 @@ class AsgardIndexer:
             doc_id = 'compliance-' + os.path.basename(md_file)
             with open(md_file, 'r', encoding='utf-8') as f:
                 content = f.read()[:4000]
-            collection.add(ids=[doc_id], documents=[content], metadatas=[{'source': 'forseti', 'type': 'compliance_report', 'filename': os.path.basename(md_file), 'indexed_at': datetime.utcnow().isoformat()}])
+            collection.add(ids=[doc_id], documents=[content], metadatas=[{'source': 'forseti', 'type': 'compliance_report', 'filename': os.path.basename(md_file), 'indexed_at': datetime.now(timezone.utc).isoformat()}])
             count += 1
         return count
 
@@ -140,7 +161,7 @@ class AsgardIndexer:
                 collection.add(ids=[doc_id], documents=[content],
                                metadatas=[{'source': 'sleipnir', 'type': 'playbook',
                                            'filename': os.path.basename(pb_file),
-                                           'indexed_at': datetime.utcnow().isoformat()}])
+                                           'indexed_at': datetime.now(timezone.utc).isoformat()}])
                 count += 1
             except Exception as e:
                 logger.warning(f'Errore lettura playbook {pb_file}: {e}')

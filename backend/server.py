@@ -25,12 +25,21 @@ def _get_modules():
     if _MODULES_CACHE:
         return _MODULES_CACHE
     backend_dir = os.path.dirname(os.path.abspath(__file__))
-    asgard_root = os.path.dirname(backend_dir)
-    module_dirs = ["Heimdall", "Mjolnir", "Bifrost", "Yggdrasil", "Fenrir", "Sleipnir", "Forseti"]
+    candidate_roots = [
+        os.getenv("ASGARD_ROOT", ""),
+        os.path.abspath(os.path.join(backend_dir, "..", "..")),
+        os.path.abspath(os.path.join(backend_dir, "..")),
+        "/app",
+    ]
+    module_dirs = ["Heimdall", "Mjolnir", "Bifrost", "Yggdrasil", "Fenrir", "Sleipnir", "Forseti", "Gjallarhorn"]
     for mod in module_dirs:
-        mod_path = os.path.join(asgard_root, mod, "main.py")
-        if os.path.exists(mod_path):
-            _MODULES_CACHE[mod] = {"path": mod_path, "name": mod}
+        for root in candidate_roots:
+            if not root or not os.path.isdir(root):
+                continue
+            mod_path = os.path.join(root, mod, "main.py")
+            if os.path.exists(mod_path):
+                _MODULES_CACHE[mod] = {"path": mod_path, "name": mod}
+                break
     return _MODULES_CACHE
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
@@ -2096,8 +2105,8 @@ def _generate_self_signed_cert(directory: Path):
         .issuer_name(name)
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(_dt.datetime.utcnow())
-        .not_valid_after(_dt.datetime.utcnow() + _dt.timedelta(days=365))
+        .not_valid_before(_dt.datetime.now(_dt.timezone.utc))
+        .not_valid_after(_dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(days=365))
         .add_extension(x509.SubjectAlternativeName([x509.DNSName("localhost")]), critical=False)
         .sign(key, hashes.SHA256())
     )

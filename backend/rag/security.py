@@ -8,7 +8,7 @@ practice. Genera un report con findings e raccomandazioni prioritarie.
 import os
 import logging
 from typing import Dict, Any, List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 logger = logging.getLogger("Asgard.RAG.Security")
 
@@ -251,7 +251,7 @@ class SecurityAuditor:
             by_severity[f["severity"]] = by_severity.get(f["severity"], 0) + 1
 
         return {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "score": score,
             "grade": self._grade(score),
             "total_findings": len(self.findings),

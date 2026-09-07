@@ -7,7 +7,7 @@ di miglioramento (o deterioramento) della configurazione.
 import os
 import sqlite3
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger("Asgard.RAG.SecurityHistory")
@@ -19,11 +19,11 @@ class SecurityScoreHistory:
     """Gestisce lo storico dei punteggi di sicurezza."""
 
     def __init__(self, db_path: Optional[str] = None):
-        self.db_path = db_path or DEFAULT_DB_PATH
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        self.db_path = db_path or os.environ.get("ASGARD_SECURITY_HISTORY_DB", DEFAULT_DB_PATH)
+        os.makedirs(os.path.dirname(os.path.abspath(self.db_path)), exist_ok=True)
         self._init_db()
 
-    def _init_db(self):
+    def _init_db(self) -> None:
         """Crea la tabella dello storico."""
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("""
@@ -44,7 +44,7 @@ class SecurityScoreHistory:
     def record_score(self, score: int, level: str, findings_count: int = 0,
                      recommendations_count: int = 0) -> Dict[str, Any]:
         """Salva un punteggio corrente."""
-        ts = datetime.utcnow().isoformat()
+        ts = datetime.now(timezone.utc).isoformat()
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 "INSERT INTO security_scores (timestamp, score, level, findings_count, recommendations_count) VALUES (?, ?, ?, ?, ?)",
@@ -55,7 +55,7 @@ class SecurityScoreHistory:
 
     def get_history(self, days: int = 90) -> List[Dict[str, Any]]:
         """Recupera lo storico degli ultimi `days` giorni."""
-        cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             cur = conn.execute(
