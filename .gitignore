@@ -16,3 +16,6 @@ backend/backups/
 
 incidents/
 output/
+
+# RAG vector index (ChromaDB) - regenerated binary data, not source.
+.asgard-suite-repo/
