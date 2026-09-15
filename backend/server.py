@@ -12,7 +12,7 @@ import urllib.request
 import urllib.error
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Header, Depends, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, PlainTextResponse, RedirectResponse
 
 
 # Global state
@@ -942,9 +942,15 @@ def health():
 def metrics():
     """Prometheus-compatible metrics endpoint.
 
-    Exposes: uptime, component health, RAG document count, auth user count.
-    No external dependencies — plain text format.
+    Exposes: uptime, component health, RAG document count, auth/tenant/agent
+    counts. No external dependencies — plain text format. This is the ONLY
+    /metrics route (a second, shadowed duplicate used to live further down
+    this file — FastAPI matches routes in registration order, so it was
+    dead code and the metric names it emitted, which the shipped Grafana
+    dashboard queries, were never actually produced by a running server).
     """
+    from auth import list_users, list_agents, list_tenants, AUTH_DB_PATH
+
     lines = []
     now = time.time()
 
@@ -954,8 +960,8 @@ def metrics():
 
     # Component health (1=ok, 0=error)
     components = {
-        "auth_db": "backend/ragnarok_auth.db",
-        "audit_db": "backend/ragnarok_audit.db",
+        "auth_db": AUTH_DB_PATH,
+        "audit_db": AUDIT_DB_PATH,
     }
     for name, path in components.items():
         healthy = 1 if os.path.exists(path) else 0
@@ -963,21 +969,34 @@ def metrics():
 
     # RAG documents
     try:
-        if hasattr(server, 'rag_indexer') and server.rag_indexer:
-            stats = server.rag_indexer.get_stats()
+        if rag_indexer:
+            stats = rag_indexer.get_stats()
             lines.append("asgard_rag_documents_total %d" % stats.get("total_documents", 0))
+        else:
+            lines.append("asgard_rag_documents_total 0")
     except Exception:
         lines.append("asgard_rag_documents_total 0")
 
-    # Auth users
+    # Auth / multi-tenant / agent counts (reuse the same accessors the
+    # /api/v1/tenants and /api/v1/agents endpoints already use, instead of
+    # a second hand-rolled SQL query against a guessed column name).
     try:
-        import sqlite3
-        conn = sqlite3.connect(os.environ.get("RAGNAROK_AUTH_DB_PATH", "backend/ragnarok_auth.db"))
-        row = conn.execute("SELECT COUNT(*) FROM users WHERE active = 1").fetchone()
-        conn.close()
-        lines.append("asgard_auth_active_users %d" % row[0])
+        users = list_users()
+        lines.append("asgard_registered_users_total %d" % len(users))
+        lines.append("asgard_auth_active_users %d" % sum(1 for u in users if u.get("is_active")))
     except Exception:
+        lines.append("asgard_registered_users_total 0")
         lines.append("asgard_auth_active_users 0")
+
+    try:
+        lines.append("asgard_registered_agents_total %d" % len(list_agents()))
+    except Exception:
+        lines.append("asgard_registered_agents_total 0")
+
+    try:
+        lines.append("asgard_active_tenants_total %d" % len(list_tenants()))
+    except Exception:
+        lines.append("asgard_active_tenants_total 0")
 
     # Backup status
     backup_dir = "backend/backups"
@@ -989,7 +1008,7 @@ def metrics():
             lines.append("asgard_last_backup_hours_ago %d" % hours_ago)
 
     return Response(
-        content="\n".join(lines),
+        content="\n".join(lines) + "\n",
         media_type="text/plain; version=0.0.4",
     )
 
@@ -2040,6 +2059,129 @@ async def rag_report_send_middleware(request: Request, call_next):
     """Middleware che innesca l'invio periodico del report proattivo."""
     _report_send_if_due()
     return await call_next(request)
+
+
+# ---------------------------------------------------------------------------
+# Enterprise v2.5 Endpoints: Metrics, Multi-Tenancy, Agents & MITRE
+# ---------------------------------------------------------------------------
+
+@app.get("/api/v1/dashboard/mitre-matrix")
+def mitre_matrix_endpoint():
+    """Returns MITRE ATT&CK coverage statistics for the suite."""
+    from core.mitre import get_mitre_coverage
+    return get_mitre_coverage()
+
+
+class TenantCreateRequest(BaseModel):
+    name: str
+    domain: Optional[str] = None
+
+
+@app.get("/api/v1/tenants")
+def get_tenants(user: dict = Depends(require_auth)):
+    from auth import list_tenants
+    return {"tenants": list_tenants()}
+
+
+@app.post("/api/v1/tenants")
+def post_tenant(req: TenantCreateRequest, user: dict = Depends(require_role("admin"))):
+    from auth import create_tenant
+    tenant_id = create_tenant(req.name, req.domain)
+    if not tenant_id:
+        raise HTTPException(status_code=400, detail="Tenant already exists or invalid data")
+    return {"status": "created", "tenant_id": tenant_id, "name": req.name}
+
+
+class AgentTokenRequest(BaseModel):
+    tenant_id: int = 1
+    expires_in_seconds: int = 86400
+
+
+@app.post("/api/v1/agents/tokens")
+def post_agent_token(req: AgentTokenRequest, user: dict = Depends(require_role("admin"))):
+    from auth import create_agent_token
+    token = create_agent_token(tenant_id=req.tenant_id, expires_in_seconds=req.expires_in_seconds, created_by=user.get("id", 1))
+    return {"token": token, "tenant_id": req.tenant_id, "expires_in_seconds": req.expires_in_seconds}
+
+
+class AgentRegisterRequest(BaseModel):
+    token: str
+    agent_id: str
+    name: str
+    ip_address: str
+    os_type: str = "windows"
+
+
+@app.post("/api/v1/agents/register")
+def post_agent_register(req: AgentRegisterRequest):
+    from auth import register_agent
+    result = register_agent(token=req.token, agent_id=req.agent_id, name=req.name, ip_address=req.ip_address, os_type=req.os_type)
+    if not result:
+        raise HTTPException(status_code=401, detail="Invalid or expired enrollment token")
+    return result
+
+
+class AgentHeartbeatRequest(BaseModel):
+    agent_id: str
+    status: str = "active"
+    metrics: Optional[Dict[str, Any]] = None
+
+
+@app.post("/api/v1/agents/heartbeat")
+def post_agent_heartbeat(req: AgentHeartbeatRequest):
+    from auth import agent_heartbeat
+    rules_json = json.dumps(req.metrics) if req.metrics else None
+    result = agent_heartbeat(agent_id=req.agent_id, status_str=req.status, rules_json=rules_json)
+    if not result:
+        raise HTTPException(status_code=404, detail="Agent not registered")
+    return result
+
+
+@app.get("/api/v1/agents")
+def get_agents(user: dict = Depends(require_auth), tenant_id: Optional[int] = None):
+    from auth import list_agents
+    return {"agents": list_agents(tenant_id=tenant_id)}
+
+
+@app.get("/api/v1/auth/oidc/config")
+def oidc_config():
+    from auth import is_oidc_enabled, OIDC_ISSUER
+    return {"enabled": is_oidc_enabled(), "issuer": OIDC_ISSUER}
+
+
+@app.get("/api/v1/auth/oidc/login")
+def oidc_login(redirect_uri: str, state: str = "state"):
+    from auth import is_oidc_enabled, generate_oidc_login_url, OIDCError
+    if not is_oidc_enabled():
+        raise HTTPException(status_code=400, detail="OIDC is not enabled on this server")
+    try:
+        return RedirectResponse(url=generate_oidc_login_url(redirect_uri, state))
+    except OIDCError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@app.get("/api/v1/auth/oidc/callback")
+def oidc_callback(code: str, redirect_uri: str, state: str = "state"):
+    """
+    Completes the OIDC login: exchanges the authorization `code` for a
+    verified identity (signature-checked against the IdP's JWKS), maps it
+    to a local user (auto-provisioned as 'viewer' on first login), and
+    returns a Ragnarök Bearer session token in the same shape as
+    /api/v1/auth/login. `redirect_uri` must match exactly what was sent
+    to /api/v1/auth/oidc/login, per the OAuth2 spec.
+    """
+    from auth import is_oidc_enabled, exchange_oidc_code, find_or_create_oidc_user, create_session, update_last_login, OIDCError
+    if not is_oidc_enabled():
+        raise HTTPException(status_code=400, detail="OIDC is not enabled on this server")
+    try:
+        claims = exchange_oidc_code(code, redirect_uri)
+        user = find_or_create_oidc_user(claims)
+    except OIDCError as exc:
+        raise HTTPException(status_code=401, detail=f"OIDC login failed: {exc}")
+
+    update_last_login(user["id"])
+    token = create_session(user["id"])
+    return {"token": token, "user": user}
 
 
 if __name__ == "__main__":

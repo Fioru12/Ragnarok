@@ -23,6 +23,24 @@ def test_bifrost_topology_endpoint():
     assert "edges" in data
     assert len(data["nodes"]) >= 3
 
+def test_metrics_endpoint_exposes_all_metrics_the_grafana_dashboard_queries():
+    # Regression test: server.py used to define /metrics TWICE. FastAPI
+    # matches routes in registration order, so the first definition always
+    # won and the second (which emitted the metric names the shipped
+    # Grafana dashboard actually queries) was dead code - every deployed
+    # dashboard would have shown "No data" on 3 of its 4 panels.
+    res = client.get("/metrics")
+    assert res.status_code == 200
+    body = res.text
+    for metric_name in (
+        "asgard_uptime_seconds",
+        "asgard_registered_users_total",
+        "asgard_registered_agents_total",
+        "asgard_active_tenants_total",
+    ):
+        assert metric_name in body, f"{metric_name} missing from /metrics output"
+
+
 def test_report_read_blocks_path_traversal():
     # Attempt to read sensitive file outside authorized report directories
     res = client.get("/api/v1/reports/read", params={"path": "../../package_release.py"})

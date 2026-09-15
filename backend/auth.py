@@ -96,15 +96,45 @@ def init_auth_db() -> None:
     try:
         conn.executescript(
             """
+            CREATE TABLE IF NOT EXISTS tenants (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL,
+                domain TEXT,
+                created_at REAL NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS agent_tokens (
+                token TEXT PRIMARY KEY,
+                tenant_id INTEGER NOT NULL DEFAULT 1,
+                created_at REAL NOT NULL,
+                expires_at REAL NOT NULL,
+                created_by INTEGER NOT NULL DEFAULT 1
+            );
+
+            CREATE TABLE IF NOT EXISTS agents (
+                agent_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                tenant_id INTEGER NOT NULL DEFAULT 1,
+                ip_address TEXT,
+                os_type TEXT,
+                status TEXT NOT NULL DEFAULT 'active',
+                last_heartbeat REAL NOT NULL,
+                rules_json TEXT NOT NULL DEFAULT '{}',
+                created_at REAL NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT UNIQUE NOT NULL,
                 username_enc TEXT,
                 password_hash TEXT NOT NULL,
                 role TEXT NOT NULL DEFAULT 'viewer',
+                tenant_id INTEGER NOT NULL DEFAULT 1,
                 created_at REAL NOT NULL,
                 last_login REAL,
-                is_active INTEGER NOT NULL DEFAULT 1
+                is_active INTEGER NOT NULL DEFAULT 1,
+                auth_provider TEXT NOT NULL DEFAULT 'local',
+                oidc_sub TEXT UNIQUE
             );
 
             CREATE TABLE IF NOT EXISTS failed_logins (
@@ -129,11 +159,35 @@ def init_auth_db() -> None:
         )
         conn.commit()
 
-        # Migration: DBs created before field encryption lack username_enc
+        # Create default tenant if none exists
+        default_tenant = conn.execute("SELECT id FROM tenants WHERE id = 1").fetchone()
+        if not default_tenant:
+            conn.execute(
+                "INSERT OR IGNORE INTO tenants (id, name, domain, created_at) VALUES (1, 'default-tenant', 'local', ?)",
+                (time.time(),)
+            )
+            conn.commit()
+
+        # Migration: DBs created before field encryption lack username_enc or tenant_id
         cols = {r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
         if "username_enc" not in cols:
             conn.execute("ALTER TABLE users ADD COLUMN username_enc TEXT")
             conn.commit()
+        if "tenant_id" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN tenant_id INTEGER NOT NULL DEFAULT 1")
+            conn.commit()
+        if "auth_provider" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN auth_provider TEXT NOT NULL DEFAULT 'local'")
+            conn.commit()
+        if "oidc_sub" not in cols:
+            # SQLite's ALTER TABLE ADD COLUMN rejects inline UNIQUE/PRIMARY KEY
+            # constraints, so the column is added plain and uniqueness is
+            # enforced by a separate index below (matches what CREATE TABLE
+            # already gives fresh databases via the inline UNIQUE above).
+            conn.execute("ALTER TABLE users ADD COLUMN oidc_sub TEXT")
+            conn.commit()
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_oidc_sub ON users(oidc_sub) WHERE oidc_sub IS NOT NULL")
+        conn.commit()
         # Convert legacy plaintext usernames (username_enc IS NULL)
         legacy = conn.execute(
             "SELECT id, username FROM users WHERE username_enc IS NULL"
@@ -152,7 +206,7 @@ def init_auth_db() -> None:
             pw = secrets.token_urlsafe(12)
             pw_hash = _hash_password(pw)
             conn.execute(
-                "INSERT INTO users (username, username_enc, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO users (username, username_enc, password_hash, role, tenant_id, created_at) VALUES (?, ?, ?, ?, 1, ?)",
                 (_username_key("admin"), _enc_field("admin"), pw_hash, "admin", time.time()),
             )
             conn.commit()
@@ -509,11 +563,325 @@ def update_user_credentials(
         conn.close()
 
 
+# ---------------------------------------------------------------------------
+# Multi-Tenant & Agent Management Helpers
+# ---------------------------------------------------------------------------
+
+def create_tenant(name: str, domain: Optional[str] = None) -> Optional[int]:
+    """Create a new tenant organization for multi-tenancy isolation."""
+    conn = _connect()
+    try:
+        cur = conn.execute(
+            "INSERT INTO tenants (name, domain, created_at) VALUES (?, ?, ?)",
+            (name.strip(), domain.strip() if domain else None, time.time()),
+        )
+        conn.commit()
+        return cur.lastrowid
+    except sqlite3.IntegrityError:
+        return None
+    finally:
+        conn.close()
+
+
+def list_tenants() -> List[Dict[str, Any]]:
+    """List all registered tenant organizations."""
+    conn = _connect()
+    try:
+        rows = conn.execute("SELECT id, name, domain, created_at FROM tenants ORDER BY id").fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def create_agent_token(tenant_id: int = 1, expires_in_seconds: int = 86400, created_by: int = 1) -> str:
+    """Generate a one-time/temporary enrollment token for registering new Heimdall agents."""
+    token = "agt_" + secrets.token_urlsafe(32)
+    now = time.time()
+    conn = _connect()
+    try:
+        conn.execute(
+            "INSERT INTO agent_tokens (token, tenant_id, created_at, expires_at, created_by) VALUES (?, ?, ?, ?, ?)",
+            (token, tenant_id, now, now + expires_in_seconds, created_by),
+        )
+        conn.commit()
+        return token
+    finally:
+        conn.close()
+
+
+def register_agent(token: str, agent_id: str, name: str, ip_address: str, os_type: str) -> Optional[Dict[str, Any]]:
+    """Register a new agent using a valid enrollment token."""
+    conn = _connect()
+    try:
+        row = conn.execute(
+            "SELECT token, tenant_id, expires_at FROM agent_tokens WHERE token = ?",
+            (token,),
+        ).fetchone()
+        if not row or row["expires_at"] < time.time():
+            return None
+        
+        tenant_id = row["tenant_id"]
+        now = time.time()
+        conn.execute(
+            """INSERT INTO agents (agent_id, name, tenant_id, ip_address, os_type, status, last_heartbeat, created_at)
+               VALUES (?, ?, ?, ?, ?, 'active', ?, ?)
+               ON CONFLICT(agent_id) DO UPDATE SET
+                   name = excluded.name,
+                   ip_address = excluded.ip_address,
+                   os_type = excluded.os_type,
+                   status = 'active',
+                   last_heartbeat = excluded.last_heartbeat""",
+            (agent_id, name, tenant_id, ip_address, os_type, now, now),
+        )
+        # Consume token after successful use
+        conn.execute("DELETE FROM agent_tokens WHERE token = ?", (token,))
+        conn.commit()
+        return {"agent_id": agent_id, "tenant_id": tenant_id, "status": "active"}
+    finally:
+        conn.close()
+
+
+def agent_heartbeat(agent_id: str, status_str: str = "active", rules_json: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Process heartbeat from an agent and return its assigned configuration."""
+    conn = _connect()
+    try:
+        now = time.time()
+        row = conn.execute("SELECT agent_id, tenant_id, rules_json FROM agents WHERE agent_id = ?", (agent_id,)).fetchone()
+        if not row:
+            return None
+        
+        updates = ["status = ?", "last_heartbeat = ?"]
+        params = [status_str, now]
+        if rules_json:
+            updates.append("rules_json = ?")
+            params.append(rules_json)
+        params.append(agent_id)
+
+        conn.execute(f"UPDATE agents SET {', '.join(updates)} WHERE agent_id = ?", params)
+        conn.commit()
+        return {"agent_id": agent_id, "tenant_id": row["tenant_id"], "rules_json": row["rules_json"]}
+    finally:
+        conn.close()
+
+
+def list_agents(tenant_id: Optional[int] = None) -> List[Dict[str, Any]]:
+    """List registered agents, optionally filtered by tenant."""
+    conn = _connect()
+    try:
+        if tenant_id:
+            rows = conn.execute(
+                "SELECT agent_id, name, tenant_id, ip_address, os_type, status, last_heartbeat, created_at FROM agents WHERE tenant_id = ? ORDER BY last_heartbeat DESC",
+                (tenant_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT agent_id, name, tenant_id, ip_address, os_type, status, last_heartbeat, created_at FROM agents ORDER BY last_heartbeat DESC"
+            ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# OIDC / Single Sign-On (SSO) Support
+#
+# Standard confidential-client authorization code flow: the login URL sends
+# the browser to the IdP; the IdP redirects back with a one-time `code`;
+# exchange_oidc_code() swaps that code for an id_token at the IdP's token
+# endpoint and cryptographically verifies its signature against the IdP's
+# published JWKS before trusting any claim in it (name/email/subject).
+# Endpoints are discovered from the IdP's own
+# /.well-known/openid-configuration document (OIDC Discovery, RFC 8414-ish)
+# instead of guessed per-provider, so this works against any spec-compliant
+# IdP (Azure AD/Entra ID, Okta, Keycloak, Auth0, ...) without special-casing.
+# ---------------------------------------------------------------------------
+
+import requests as _requests
+import jwt as _jwt
+from jwt import PyJWKClient as _PyJWKClient
+
+OIDC_ISSUER = os.environ.get("ASGARD_OIDC_ISSUER", "")
+OIDC_CLIENT_ID = os.environ.get("ASGARD_OIDC_CLIENT_ID", "")
+OIDC_CLIENT_SECRET = os.environ.get("ASGARD_OIDC_CLIENT_SECRET", "")
+
+
+class OIDCError(Exception):
+    """Raised for any OIDC discovery/exchange/verification failure. The
+    message is safe to show to an admin configuring SSO, but callers should
+    not leak it to an unauthenticated caller beyond a generic 400."""
+
+
+def is_oidc_enabled() -> bool:
+    return bool(OIDC_ISSUER and OIDC_CLIENT_ID)
+
+
+# Cache of {issuer: discovery_document}. The discovery document is static
+# for the lifetime of an IdP deployment, so process-lifetime caching avoids
+# an extra network round trip on every login without any real staleness risk.
+_oidc_discovery_cache: Dict[str, Dict[str, Any]] = {}
+_jwks_client_cache: Dict[str, Any] = {}
+
+
+def _discover_oidc_config(issuer: Optional[str] = None) -> Dict[str, Any]:
+    issuer = (issuer or OIDC_ISSUER).rstrip("/")
+    if issuer in _oidc_discovery_cache:
+        return _oidc_discovery_cache[issuer]
+    try:
+        resp = _requests.get(f"{issuer}/.well-known/openid-configuration", timeout=8)
+        resp.raise_for_status()
+        config = resp.json()
+    except Exception as exc:
+        raise OIDCError(
+            f"Impossibile scaricare la configurazione OIDC da {issuer}: {exc}"
+        ) from exc
+
+    for required in ("authorization_endpoint", "token_endpoint", "jwks_uri", "issuer"):
+        if required not in config:
+            raise OIDCError(
+                f"Documento di discovery OIDC di {issuer} incompleto: manca '{required}'"
+            )
+    _oidc_discovery_cache[issuer] = config
+    return config
+
+
+def generate_oidc_login_url(redirect_uri: str, state: str) -> str:
+    """Generate the OIDC authorization URL the browser should be sent to."""
+    config = _discover_oidc_config()
+    params = {
+        "client_id": OIDC_CLIENT_ID,
+        "response_type": "code",
+        "redirect_uri": redirect_uri,
+        "scope": "openid profile email",
+        "state": state,
+    }
+    from urllib.parse import urlencode
+    return f"{config['authorization_endpoint']}?{urlencode(params)}"
+
+
+def exchange_oidc_code(code: str, redirect_uri: str) -> Dict[str, Any]:
+    """
+    Exchange an authorization `code` for a verified identity.
+
+    Performs the full confidential-client flow: POSTs to the IdP's token
+    endpoint, then verifies the returned id_token's RS256 signature against
+    the IdP's live JWKS (fetched/cached via PyJWKClient) and validates
+    issuer/audience/expiry before returning any claim. Never trusts an
+    unverified token. Raises OIDCError on any failure (network, bad
+    credentials, invalid/expired/mis-issued token).
+    """
+    if not OIDC_CLIENT_SECRET:
+        raise OIDCError(
+            "ASGARD_OIDC_CLIENT_SECRET non configurato: richiesto per lo scambio "
+            "del codice con un client confidenziale (standard per un'app server-side)."
+        )
+
+    config = _discover_oidc_config()
+
+    try:
+        token_resp = _requests.post(
+            config["token_endpoint"],
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": redirect_uri,
+                "client_id": OIDC_CLIENT_ID,
+                "client_secret": OIDC_CLIENT_SECRET,
+            },
+            headers={"Accept": "application/json"},
+            timeout=10,
+        )
+    except Exception as exc:
+        raise OIDCError(f"Errore di rete nello scambio del codice OIDC: {exc}") from exc
+
+    if token_resp.status_code != 200:
+        raise OIDCError(
+            f"L'IdP ha rifiutato lo scambio del codice (HTTP {token_resp.status_code}): "
+            f"{token_resp.text[:300]}"
+        )
+
+    token_data = token_resp.json()
+    id_token = token_data.get("id_token")
+    if not id_token:
+        raise OIDCError("La risposta dell'IdP non contiene un id_token.")
+
+    jwks_uri = config["jwks_uri"]
+    if jwks_uri not in _jwks_client_cache:
+        _jwks_client_cache[jwks_uri] = _PyJWKClient(jwks_uri)
+    jwks_client = _jwks_client_cache[jwks_uri]
+
+    try:
+        signing_key = jwks_client.get_signing_key_from_jwt(id_token)
+        claims = _jwt.decode(
+            id_token,
+            signing_key.key,
+            algorithms=["RS256"],
+            audience=OIDC_CLIENT_ID,
+            issuer=config["issuer"],
+            options={"require": ["exp", "iat", "sub"]},
+        )
+    except _jwt.PyJWTError as exc:
+        raise OIDCError(f"id_token non valido o firma non verificabile: {exc}") from exc
+
+    return claims
+
+
+def find_or_create_oidc_user(claims: Dict[str, Any], tenant_id: int = 1) -> Dict[str, Any]:
+    """
+    Map a verified OIDC identity to a local user row, creating it on first
+    login. Looked up by the token's `sub` claim (stable per-IdP identifier
+    per the OIDC spec), never by email/username alone, since those can
+    change at the IdP. New SSO users are provisioned with the least-
+    privileged role ('viewer'); an admin must explicitly promote them -
+    SSO authenticates identity, it does not grant authorization.
+    """
+    sub = claims.get("sub")
+    if not sub:
+        raise OIDCError("id_token privo del claim 'sub' obbligatorio.")
+
+    display_name = claims.get("preferred_username") or claims.get("email") or claims.get("name") or sub
+
+    conn = _connect()
+    try:
+        row = conn.execute("SELECT id FROM users WHERE oidc_sub = ?", (sub,)).fetchone()
+        if row:
+            user_id = row["id"]
+        else:
+            now = time.time()
+            cur = conn.execute(
+                """INSERT INTO users
+                   (username, username_enc, password_hash, role, tenant_id, created_at,
+                    is_active, auth_provider, oidc_sub)
+                   VALUES (?, ?, ?, 'viewer', ?, ?, 1, 'oidc', ?)""",
+                (
+                    _username_key(f"oidc:{sub}"),
+                    _enc_field(display_name),
+                    # SSO users never authenticate with a local password; store
+                    # an unusable hash so check_user() can never match it.
+                    _hash_password(secrets.token_urlsafe(32)),
+                    tenant_id,
+                    now,
+                    sub,
+                ),
+            )
+            conn.commit()
+            user_id = cur.lastrowid
+
+        row = conn.execute(
+            "SELECT id, username_enc, username, role FROM users WHERE id = ?", (user_id,)
+        ).fetchone()
+    finally:
+        conn.close()
+
+    display = _dec_field(row["username_enc"]) if row["username_enc"] else row["username"]
+    return {"id": row["id"], "username": display, "role": row["role"]}
+
+
 # Convenience: any authenticated user (regardless of role)
 require_auth = require_role("admin", "analyst", "viewer")
 
 
 # Initialize the auth database on module import (creates tables + default admin)
 init_auth_db()
+
 
 

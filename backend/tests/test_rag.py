@@ -4,14 +4,19 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 def safe_rmtree(path, max_retries=5):
     """Rimuove una directory con retry per gestire file lock su Windows."""
+    if not os.path.exists(path):
+        return
     for i in range(max_retries):
         try:
-            shutil.rmtree(path, ignore_errors=False)
+            shutil.rmtree(path, ignore_errors=True)
             return
-        except PermissionError:
+        except Exception:
             gc.collect()
-            time.sleep(0.5)
-    shutil.rmtree(path, ignore_errors=True)
+            time.sleep(0.3)
+    try:
+        shutil.rmtree(path, ignore_errors=True)
+    except Exception:
+        pass
 
 
 @pytest.fixture
