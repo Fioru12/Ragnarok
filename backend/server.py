@@ -12,7 +12,7 @@ import urllib.request
 import urllib.error
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Header, Depends, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response, PlainTextResponse, RedirectResponse
+from fastapi.responses import FileResponse, Response, PlainTextResponse
 
 
 # Global state
@@ -62,7 +62,6 @@ from auth import (
     deactivate_user,
     update_user_credentials,
     init_auth_db,
-    SESSION_TTL,
 )
 
 # --- Asgard RAG Engine (Retrieval-Augmented Generation) ---
