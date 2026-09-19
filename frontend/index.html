@@ -545,6 +545,11 @@
                 <p class="text-[10px] text-slate-500 mt-1">Sent as the X-API-Key header on /execute and /chat calls. Printed to the backend console on first startup if RAGNAROK_API_KEY is not set.</p>
             </div>
             <div>
+                <label class="block text-xs font-mono text-slate-300 uppercase mb-2">Ragnarök Backend URL</label>
+                <input type="text" id="backendUrlInput" placeholder="http://127.0.0.1:8080" class="w-full bg-black border border-[#1d1d1f] rounded-full px-5 py-3 text-xs text-slate-200 font-mono focus:outline-none focus:border-blue-500">
+                <p class="text-[10px] text-slate-500 mt-1">Base URL of the Python backend (host + port). Used for REST and telemetry WebSocket. Changing it reloads the page.</p>
+            </div>
+            <div>
                 <label class="block text-xs font-mono text-slate-300 uppercase mb-2">Accent Color</label>
                 <div class="flex space-x-3">
                     <button onclick="setAccent('#0071e3', 'rgba(0, 113, 227, 0.2)')" class="w-8 h-8 rounded-full bg-[#0071e3] border-2 border-white/20"></button>
@@ -561,13 +566,14 @@
     </div>
 
     <script>
-        const API_BASE = "http://127.0.0.1:8080";
-        const API_EXECUTE = API_BASE + "/api/v1/execute";
-        const API_CHAT = API_BASE + "/api/v1/chat";
-        const API_STATUS = API_BASE + "/api/v1/status";
-        const API_REPORTS = API_BASE + "/api/v1/reports";
-        const API_OLLAMA = API_BASE + "/api/v1/ollama/status";
-        const WS_URL = "ws://127.0.0.1:8080/ws/telemetry";
+        const DEFAULT_BACKEND_URL = "http://127.0.0.1:8080";
+        function apiBase() {
+            const v = (localStorage.getItem('asgard_backend_url') || '').trim().replace(/\/+$/, '');
+            return v || DEFAULT_BACKEND_URL;
+        }
+        function wsUrl() {
+            return apiBase().replace(/^http/, 'ws') + "/ws/telemetry";
+        }
 
         const tabMap = ['overview', 'heimdall', 'mjolnir', 'bifrost', 'inventory', 'yggdrasil', 'fenrir', 'hunt', 'sleipnir', 'reports', 'ai', 'setup'];
         let chatHistory = [];
@@ -596,7 +602,7 @@
 
         function connectWebSocket() {
             try {
-                ws = new WebSocket(WS_URL);
+                ws = new WebSocket(wsUrl());
                 ws.onopen = () => {
                     document.getElementById('wsStatus').textContent = '● Live Stream';
                     document.getElementById('wsStatus').className = 'text-xs font-mono px-3 py-1 bg-white/5 rounded-full text-emerald-400';
@@ -652,7 +658,7 @@
 
         async function detectOllama() {
             try {
-                const res = await fetch(API_OLLAMA);
+                const res = await fetch(apiBase() + "/api/v1/ollama/status");
                 const data = await res.json();
                 if (data.available) {
                     const select = document.getElementById('providerSelect');
@@ -695,7 +701,7 @@
 
         async function refreshHealth() {
             try {
-                const res = await fetch(API_STATUS);
+                const res = await fetch(apiBase() + "/api/v1/status");
                 const data = await res.json();
                 const mods = data.modules || {};
                 let online = 0;
@@ -763,7 +769,7 @@
                 return;
             }
             try {
-                const res = await fetch(`${API_BASE}/api/v1/setup`, { headers: ragnarokAuthHeaders() });
+                const res = await fetch(`${apiBase()}/api/v1/setup`, { headers: ragnarokAuthHeaders() });
                 if (!res.ok) throw new Error('unauthorized');
                 const data = await res.json();
                 const configured = data.fields?.virustotal_api_key?.configured;
@@ -847,7 +853,7 @@
             const provider = localStorage.getItem('asgard_provider') || 'openrouter';
             const model = localStorage.getItem('asgard_model') || 'openai/gpt-4o-mini';
             try {
-                const res = await fetch(API_EXECUTE, {
+                const res = await fetch(apiBase() + "/api/v1/execute", {
                     method: "POST",
                     headers: { "Content-Type": "application/json", ...ragnarokAuthHeaders() },
                     body: JSON.stringify({ module: moduleName, action: actionName, target, api_key: apiKey, provider, model })
@@ -876,7 +882,7 @@
             const tbody = document.getElementById('huntTable');
             tbody.innerHTML = '<tr><td colspan="5" class="py-6 text-slate-400 text-center animate-pulse">Searching Fenrir intelligence database...</td></tr>';
             try {
-                const res = await fetch(`${API_BASE}/api/v1/hunt?q=${encodeURIComponent(query)}`);
+                const res = await fetch(`${apiBase()}/api/v1/hunt?q=${encodeURIComponent(query)}`);
                 const data = await res.json();
                 const results = data.results || [];
                 if (results.length === 0) {
@@ -916,7 +922,7 @@
             results.classList.add('hidden');
             tbody.innerHTML = '';
             try {
-                const res = await fetch(API_EXECUTE, {
+                const res = await fetch(apiBase() + "/api/v1/execute", {
                     method: "POST",
                     headers: { "Content-Type": "application/json", ...ragnarokAuthHeaders() },
                     body: JSON.stringify({ module: 'bifrost', action: 'discover', target })
@@ -965,7 +971,7 @@
             const provider = localStorage.getItem('asgard_provider') || 'openrouter';
             const model = localStorage.getItem('asgard_model') || 'openai/gpt-4o-mini';
             try {
-                const res = await fetch(API_CHAT, {
+                const res = await fetch(apiBase() + "/api/v1/chat", {
                     method: "POST",
                     headers: { "Content-Type": "application/json", ...ragnarokAuthHeaders() },
                     body: JSON.stringify({ prompt, history: chatHistory.slice(-10), api_key: apiKey, provider, model })
@@ -1002,7 +1008,7 @@
             const listEl = document.getElementById('reportsList');
             listEl.innerHTML = '<p class="text-slate-500 text-xs font-mono">Loading reports...</p>';
             try {
-                const res = await fetch(API_REPORTS);
+                const res = await fetch(apiBase() + "/api/v1/reports");
                 const data = await res.json();
                 if (!data.reports || data.reports.length === 0) {
                     listEl.innerHTML = '<p class="text-slate-500 text-xs font-mono">No reports found. Run Mjolnir or Yggdrasil to generate reports.</p>';
@@ -1028,7 +1034,7 @@
             document.querySelectorAll('.report-item').forEach(el => el.style.borderColor = 'transparent');
             if (itemEl) itemEl.style.borderColor = 'var(--accent)';
             try {
-                const res = await fetch(API_REPORTS + '/read?path=' + encodeURIComponent(path));
+                const res = await fetch(apiBase() + '/api/v1/reports/read?path=' + encodeURIComponent(path));
                 const data = await res.json();
                 preview.textContent = data.content || 'Empty report.';
             } catch (e) {
@@ -1055,6 +1061,7 @@
             document.getElementById('providerSelect').value = localStorage.getItem('asgard_provider') || 'openrouter';
             document.getElementById('modelInput').value = localStorage.getItem('asgard_model') || 'openai/gpt-4o-mini';
             document.getElementById('ragnarokKeyInput').value = localStorage.getItem('asgard_ragnarok_key') || '';
+            document.getElementById('backendUrlInput').value = localStorage.getItem('asgard_backend_url') || '';
             document.getElementById('settingsModal').classList.remove('hidden');
             document.getElementById('settingsModal').classList.add('flex');
         }
@@ -1069,8 +1076,13 @@
             localStorage.setItem('asgard_provider', document.getElementById('providerSelect').value);
             localStorage.setItem('asgard_model', document.getElementById('modelInput').value.trim() || 'openai/gpt-4o-mini');
             localStorage.setItem('asgard_ragnarok_key', document.getElementById('ragnarokKeyInput').value.trim());
+            const newBackendUrl = document.getElementById('backendUrlInput').value.trim().replace(/\/+$/, '');
+            const oldBackendUrl = localStorage.getItem('asgard_backend_url') || '';
+            if (newBackendUrl) localStorage.setItem('asgard_backend_url', newBackendUrl);
+            else localStorage.removeItem('asgard_backend_url');
             updateLlmIndicator();
             closeSettings();
+            if (newBackendUrl !== oldBackendUrl) { location.reload(); return; }
             showToast('LLM Settings saved successfully!', 'success');
         }
 
@@ -1090,7 +1102,7 @@
             const token = localStorage.getItem('asgard_session_token');
             if (!token) { loggedOut.classList.remove('hidden'); loggedIn.classList.add('hidden'); applyRoleVisibility(null); return; }
             try {
-                const res = await fetch(`${API_BASE}/api/v1/auth/me`, { headers: ragnarokAuthHeaders() });
+                const res = await fetch(`${apiBase()}/api/v1/auth/me`, { headers: ragnarokAuthHeaders() });
                 if (!res.ok) throw new Error('invalid');
                 const data = await res.json();
                 badge.textContent = `${data.user.username} (${data.user.role})`;
@@ -1114,7 +1126,7 @@
             if (!u || !p) { msg.textContent = 'Inserisci username e password.'; return; }
             btn.disabled = true; btn.textContent = '...';
             try {
-                const res = await fetch(`${API_BASE}/api/v1/auth/login`, {
+                const res = await fetch(`${apiBase()}/api/v1/auth/login`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ username: u, password: p })
@@ -1144,7 +1156,7 @@
             const token = localStorage.getItem('asgard_session_token');
             if (token) {
                 try {
-                    await fetch(`${API_BASE}/api/v1/auth/logout`, { method: 'POST', headers: ragnarokAuthHeaders() });
+                    await fetch(`${apiBase()}/api/v1/auth/logout`, { method: 'POST', headers: ragnarokAuthHeaders() });
                 } catch (e) { /* best-effort: remove locally anyway */ }
             }
             localStorage.removeItem('asgard_session_token');
@@ -1176,7 +1188,7 @@
                 return;
             }
             try {
-                const res = await fetch(`${API_BASE}/api/v1/setup`, { headers: ragnarokAuthHeaders() });
+                const res = await fetch(`${apiBase()}/api/v1/setup`, { headers: ragnarokAuthHeaders() });
                 if (!res.ok) throw new Error('unauthorized');
                 const data = await res.json();
                 warning.classList.add('hidden');
@@ -1219,7 +1231,7 @@
                 return;
             }
             try {
-                const res = await fetch(`${API_BASE}/api/v1/setup`, {
+                const res = await fetch(`${apiBase()}/api/v1/setup`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', ...ragnarokAuthHeaders() },
                     body: JSON.stringify({ values }),
