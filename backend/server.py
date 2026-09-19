@@ -2043,75 +2043,8 @@ def mitre_matrix_endpoint():
     return get_mitre_coverage()
 
 
-class TenantCreateRequest(BaseModel):
-    name: str
-    domain: Optional[str] = None
-
-
-@app.get("/api/v1/tenants")
-def get_tenants(user: dict = Depends(require_auth)):
-    from auth import list_tenants
-    return {"tenants": list_tenants()}
-
-
-@app.post("/api/v1/tenants")
-def post_tenant(req: TenantCreateRequest, user: dict = Depends(require_role("admin"))):
-    from auth import create_tenant
-    tenant_id = create_tenant(req.name, req.domain)
-    if not tenant_id:
-        raise HTTPException(status_code=400, detail="Tenant already exists or invalid data")
-    return {"status": "created", "tenant_id": tenant_id, "name": req.name}
-
-
-class AgentTokenRequest(BaseModel):
-    tenant_id: int = 1
-    expires_in_seconds: int = 86400
-
-
-@app.post("/api/v1/agents/tokens")
-def post_agent_token(req: AgentTokenRequest, user: dict = Depends(require_role("admin"))):
-    from auth import create_agent_token
-    token = create_agent_token(tenant_id=req.tenant_id, expires_in_seconds=req.expires_in_seconds, created_by=user.get("id", 1))
-    return {"token": token, "tenant_id": req.tenant_id, "expires_in_seconds": req.expires_in_seconds}
-
-
-class AgentRegisterRequest(BaseModel):
-    token: str
-    agent_id: str
-    name: str
-    ip_address: str
-    os_type: str = "windows"
-
-
-@app.post("/api/v1/agents/register")
-def post_agent_register(req: AgentRegisterRequest):
-    from auth import register_agent
-    result = register_agent(token=req.token, agent_id=req.agent_id, name=req.name, ip_address=req.ip_address, os_type=req.os_type)
-    if not result:
-        raise HTTPException(status_code=401, detail="Invalid or expired enrollment token")
-    return result
-
-
-class AgentHeartbeatRequest(BaseModel):
-    agent_id: str
-    status: str = "active"
-    metrics: Optional[Dict[str, Any]] = None
-
-
-@app.post("/api/v1/agents/heartbeat")
-def post_agent_heartbeat(req: AgentHeartbeatRequest):
-    from auth import agent_heartbeat
-    rules_json = json.dumps(req.metrics) if req.metrics else None
-    result = agent_heartbeat(agent_id=req.agent_id, status_str=req.status, rules_json=rules_json)
-    if not result:
-        raise HTTPException(status_code=404, detail="Agent not registered")
-    return result
-
-
-@app.get("/api/v1/agents")
-def get_agents(user: dict = Depends(require_auth), tenant_id: Optional[int] = None):
-    from auth import list_agents
-    return {"agents": list_agents(tenant_id=tenant_id)}
+from routers.tenants_agents import router as tenants_agents_router
+app.include_router(tenants_agents_router)
 
 
 @app.get("/api/v1/auth/oidc/config")
