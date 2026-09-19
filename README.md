@@ -26,12 +26,16 @@
 | 4 | **RBAC** | Sidebar account block logged in as admin (badge visible) |
 
 <p align="center">
+  <!-- Screenshots pending capture — see docs/screenshots/README.md, then uncomment:
   <img src="docs/screenshots/overview.png" width="45%" alt="Command center" />
   <img src="docs/screenshots/ai-assistant.png" width="45%" alt="AI assistant" />
+  -->
 </p>
 <p align="center">
+  <!--
   <img src="docs/screenshots/rag-dashboard.png" width="45%" alt="RAG dashboard" />
   <img src="docs/screenshots/rbac-account.png" width="45%" alt="RBAC account" />
+  -->
 </p>
 
 

@@ -1,0 +1,19 @@
+# Keep the build context small: code + frontend only.
+.git/
+.github/
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+node_modules/
+src-tauri/target/
+.asgard-suite-repo/
+backend/backups/
+backend/__pycache__/
+backend/.pytest_cache/
+backend/*.db
+*.db
+.tls/
+incidents/
+output/
+.env

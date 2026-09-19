@@ -1,0 +1,40 @@
+# Ragnarök — local / small-prod deploy.
+#
+# Usage:
+#   cp .env.example .env   # then set RAGNAROK_API_KEY + RAGNAROK_AUTH_SECRET
+#   docker compose up -d --build
+#   docker compose logs -f ragnarok   # copy the generated keys on first boot
+#
+# The container always listens on 8080 internally; map any host port via
+# RAGNAROK_PORT in .env (compose interpolates .env automatically).
+# Persistent state (auth/audit DBs, vector index, backups) lives in named
+# volumes and survives `docker compose down` (use `down -v` to wipe it).
+services:
+  ragnarok:
+    build: .
+    image: asgard-suite/ragnarok:latest
+    container_name: ragnarok
+    restart: unless-stopped
+    ports:
+      - "${RAGNAROK_PORT:-8080}:8080"
+    environment:
+      RAGNAROK_HOST: 0.0.0.0
+      RAGNAROK_API_KEY: ${RAGNAROK_API_KEY:-}
+      RAGNAROK_AUTH_SECRET: ${RAGNAROK_AUTH_SECRET:-}
+      RAGNAROK_SESSION_TTL: ${RAGNAROK_SESSION_TTL:-28800}
+      RAGNAROK_LOGIN_MAX_ATTEMPTS: ${RAGNAROK_LOGIN_MAX_ATTEMPTS:-5}
+      RAGNAROK_LOCKOUT_SECONDS: ${RAGNAROK_LOCKOUT_SECONDS:-300}
+      RAGNAROK_RATE_LIMIT_MAX: ${RAGNAROK_RATE_LIMIT_MAX:-300}
+      RAGNAROK_RATE_LIMIT_WINDOW: ${RAGNAROK_RATE_LIMIT_WINDOW:-60}
+      RAG_AUTO_INDEX_MINUTES: ${RAG_AUTO_INDEX_MINUTES:-0}
+      RAG_ANOMALY_WATCH_MINUTES: ${RAG_ANOMALY_WATCH_MINUTES:-15}
+      RAG_REPORT_SEND_MINUTES: ${RAG_REPORT_SEND_MINUTES:-1440}
+      RAG_REPORT_SEND_CRON: ${RAG_REPORT_SEND_CRON:-}
+      ASGARD_TLS: ${ASGARD_TLS:-false}
+    volumes:
+      - ragnarok-state:/state
+      - ragnarok-backups:/asgard/Ragnarok/backend/backups
+
+volumes:
+  ragnarok-state:
+  ragnarok-backups:

@@ -1818,37 +1818,8 @@ async def rag_report_notify_endpoint(user: dict = Depends(require_role("admin", 
 # ======================================================================
 
 
-@app.get("/api/v1/rag/gdpr/checklist")
-async def gdpr_checklist():
-    """Checklist GDPR per autovalutazione (pubblica, no auth)."""
-    try:
-        from rag.gdpr import GDPR_CHECKLIST
-        return {"status": "success", "checklist": GDPR_CHECKLIST}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/v1/rag/gdpr/evaluate")
-async def gdpr_evaluate(answers: Dict[str, bool]):
-    """Valuta le risposte alla checklist GDPR e restituisce score + gap analysis."""
-    try:
-        from rag.gdpr import GDPRComplianceChecker
-        checker = GDPRComplianceChecker()
-        return {"status": "success", "evaluation": checker.evaluate_checklist(answers)}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/v1/rag/gdpr/recommend")
-async def gdpr_recommend(company_size: str = "small", sector: Optional[str] = None,
-                         maturity: Optional[str] = None):
-    """Raccomanda agenti Asgard per PMI in base a dimensione, settore e maturità."""
-    try:
-        from rag.gdpr import GDPRComplianceChecker
-        checker = GDPRComplianceChecker()
-        return {"status": "success", "recommendation": checker.recommend_agents(company_size, sector, maturity)}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+from routers.gdpr import router as gdpr_router
+app.include_router(gdpr_router)
 
 # ======================================================================
 # Auto-indexing schedulato
