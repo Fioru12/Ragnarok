@@ -12,7 +12,7 @@ import urllib.request
 import urllib.error
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Header, Depends, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response, PlainTextResponse
+from fastapi.responses import FileResponse, Response
 
 
 # Global state
@@ -46,22 +46,11 @@ from typing import Optional, List, Dict, Any
 from pathlib import Path
 
 # --- User authentication & RBAC (zero new deps, stdlib only) ---
+# NOTE: most auth handlers live in routers/auth.py; only names still used
+# by endpoints remaining in this file are imported here.
 from auth import (
-    require_auth,
     require_role,
-    check_user,
-    check_login_allowed,
-    record_failed_login,
-    clear_failed_logins,
-    create_session,
-    destroy_session,
-    update_last_login,
     list_users,
-    create_user,
-    set_user_role,
-    deactivate_user,
-    update_user_credentials,
-    init_auth_db,
 )
 
 # --- Asgard RAG Engine (Retrieval-Augmented Generation) ---
@@ -1885,7 +1874,6 @@ app.include_router(tenants_agents_router)
 
 if __name__ == "__main__":
     import uvicorn
-    import ssl
 
     host = os.environ.get("RAGNAROK_HOST", "127.0.0.1")
     port = int(os.environ.get("RAGNAROK_PORT", "8080"))
