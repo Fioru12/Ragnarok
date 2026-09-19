@@ -63,7 +63,7 @@ This guide walks you through capturing the four key screenshots for the Ragnarö
 - Incident timeline with dots
 
 **How**:
-1. Open `http://localhost:8000/dashboard` in Chrome/Edge
+1. Open `http://localhost:8080/dashboard` in Chrome/Edge
 2. Wait for KPIs to load (they auto-refresh)
 3. If you see the "Setup Wizard" instead: the admin hasn't been claimed yet. Complete the wizard first, then login as admin
 4. Capture the full page (or the top portion with KPIs + score)
