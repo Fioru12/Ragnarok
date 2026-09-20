@@ -1762,6 +1762,110 @@ def test_cli_parser_builds_without_crashing_for_every_subcommand():
     assert callable(p_sec_hist.get_default("func"))
 
 
+@pytest.fixture
+def isolated_rag_db(tmp_path, monkeypatch):
+    """Points every rag/* class's default ChromaDB path at an empty temp
+    dir, so CLI smoke tests below never touch the real dev database."""
+    monkeypatch.setenv("ASGARD_RAG_DB_PATH", str(tmp_path / "chroma"))
+    return tmp_path
+
+
+def test_cli_main_builds_and_dispatches_real_parser(isolated_rag_db, capsys):
+    """
+    The authoritative version of test_cli_parser_builds_without_crashing_
+    for_every_subcommand above: calls the actual cli.main() - the exact
+    function that crashed on every subcommand - end to end with real argv,
+    instead of a hand-built parser that only mimics its shape.
+    """
+    from rag import cli as cli_module
+    cli_module.main(["stats"])
+    out = capsys.readouterr().out
+    assert "Documenti indicizzati" in out
+
+
+def test_cli_cmd_insights_smoke(isolated_rag_db, capsys):
+    from rag import cli as cli_module
+    import argparse
+    cli_module.cmd_insights(argparse.Namespace())
+    out = capsys.readouterr().out
+    assert out.strip() != ""
+
+
+def test_cli_cmd_report_markdown_and_save(isolated_rag_db, capsys, tmp_path):
+    from rag import cli as cli_module
+    import argparse
+
+    cli_module.cmd_report(argparse.Namespace(pdf=False, save=False, out=None))
+    out = capsys.readouterr().out
+    assert out.strip() != ""
+
+    save_dir = tmp_path / "reports"
+    cli_module.cmd_report(argparse.Namespace(pdf=False, save=True, out=str(save_dir)))
+    out = capsys.readouterr().out
+    assert "Report salvato" in out
+    assert len(list(save_dir.glob("*.md"))) == 1
+
+
+def test_cli_cmd_notify_inert_without_gjallarhorn(isolated_rag_db, capsys, monkeypatch):
+    monkeypatch.delenv("GJALLARHORN_HUB_URL", raising=False)
+    monkeypatch.delenv("GJALLARHORN_API_KEY", raising=False)
+    from rag import cli as cli_module
+    import argparse
+
+    cli_module.cmd_notify(argparse.Namespace(save=False, out=None))
+    out = capsys.readouterr().out
+    assert "non configurato" in out
+
+
+def test_cli_cmd_anomalies_inert_without_gjallarhorn(isolated_rag_db, capsys, monkeypatch):
+    monkeypatch.delenv("GJALLARHORN_HUB_URL", raising=False)
+    monkeypatch.delenv("GJALLARHORN_API_KEY", raising=False)
+    from rag import cli as cli_module
+    import argparse
+
+    cli_module.cmd_anomalies(argparse.Namespace(days=30))
+    out = capsys.readouterr().out
+    assert "non configurato" in out
+
+
+def test_cli_cmd_gdpr_checklist_action(capsys):
+    from rag import cli as cli_module
+    import argparse
+    cli_module.cmd_gdpr(argparse.Namespace(action="checklist"))
+    out = capsys.readouterr().out
+    assert "CHECKLIST GDPR" in out
+
+
+def test_cli_cmd_gdpr_recommend_action(capsys):
+    from rag import cli as cli_module
+    import argparse
+    cli_module.cmd_gdpr(argparse.Namespace(action="recommend", size="small", sector=None, maturity=None))
+    out = capsys.readouterr().out
+    assert "RACCOMANDAZIONE AGENTI" in out
+
+
+def test_cli_cmd_gdpr_report_action(capsys):
+    from rag import cli as cli_module
+    import argparse
+    cli_module.cmd_gdpr(argparse.Namespace(action="report", size="small", sector=None, maturity=None))
+    out = capsys.readouterr().out
+    assert "REPORT GDPR" in out
+
+
+def test_cli_cmd_index_and_query_smoke(isolated_rag_db, capsys, temp_asgard_root, monkeypatch):
+    monkeypatch.setenv("ASGARD_ROOT", str(temp_asgard_root))
+    from rag import cli as cli_module
+    import argparse
+
+    cli_module.cmd_index(argparse.Namespace())
+    out = capsys.readouterr().out
+    assert "Indicizzazione completata" in out
+
+    cli_module.cmd_query(argparse.Namespace(query="brute force", n=5, sources=None))
+    out = capsys.readouterr().out
+    assert "risultati per" in out or "Nessun risultato" in out
+
+
 # ======================================================================
 # Parametri di detection configurabili
 # ======================================================================
