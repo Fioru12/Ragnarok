@@ -19,7 +19,7 @@ Ragnarok/backend/rag/
 ├── indexer.py           # Indicizzazione dati in ChromaDB
 ├── retriever.py         # Query semantiche con FastEmbed
 ├── insights.py          # Analisi proattiva (IP top, CVE, compliance)
-├── cli.py               # CLI: index / query / insights / stats
+├── cli.py               # CLI: index / query / insights / report / notify / anomalies / security / security-history / gdpr / stats
 └── memory.py            # Memoria conversazionale SQLite
 ```
 
@@ -111,7 +111,7 @@ rag/
 ├── report.py      # report Markdown con raccomandazioni deterministiche
 ├── dispatch.py    # alert Gjallarhorn (report + anomalie + playbook hint)
 ├── memory.py      # memoria conversazionale SQLite
-├── cli.py         # index / query / insights / report / notify / anomalies / stats
+├── cli.py         # index / query / insights / report / notify / anomalies / security / security-history / gdpr / stats
 ```
 
 Principi trasversali:

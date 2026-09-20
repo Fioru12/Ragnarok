@@ -127,12 +127,38 @@ def cmd_security(args):
     """Security audit della configurazione RAG."""
     from rag.security import SecurityAuditor
     auditor = SecurityAuditor()
-    report = auditor.run_audit()
+    audit = auditor.run_full_audit()
     if args.save:
-        path = auditor.save_report(output_dir=args.out)
+        path = auditor.save_report(output_dir=args.out, audit=audit)
         print(f"[ASGARD] Report sicurezza salvato: {path}")
     else:
-        _print_utf8(report)
+        _print_utf8(auditor.format_report(audit=audit))
+
+
+def cmd_security_history(args):
+    """Storico e trend del security score nel tempo; --record ne registra uno nuovo."""
+    from rag.security_history import SecurityScoreHistory
+    history = SecurityScoreHistory()
+
+    if args.record:
+        from rag.security import SecurityAuditor
+        audit = SecurityAuditor().run_full_audit()
+        recorded = history.record_score(
+            score=audit["score"],
+            level=audit["grade"],
+            findings_count=audit["total_findings"],
+        )
+        print(f"[ASGARD] Punteggio registrato: {recorded['score']}/100 ({recorded['level']}) - {recorded['timestamp']}")
+
+    summary = history.get_summary(args.days)
+    if not summary.get("available"):
+        print(f"[ASGARD] {summary.get('message', 'Nessun dato storico disponibile.')}")
+        return
+
+    print(f"\n[ASGARD] Storico security score (ultimi {summary['period_days']} giorni):")
+    print(f"  Punteggio attuale: {summary['current_score']}/100")
+    print(f"  Min/Max/Media: {summary['min_score']}/{summary['max_score']}/{summary['avg_score']}")
+    print(f"  Trend: {summary['trend']} ({summary['data_points']} misurazioni)")
 
 
 def cmd_gdpr(args):

@@ -94,8 +94,8 @@ class AsgardIndexer:
             cve = row.get('cve_id') or 'N/A'
             threat = row.get('threat_type') or 'N/A'
             sev = row.get('severity') or 'unknown'
-            text = f"IOC: {val}. Tipo: {typ}. Fonte: {src}. CVE: {cve}. Threat: {threat}."
-            collection.add(ids=[doc_id], documents=[text], metadatas=[{'source': 'fenrir', 'type': 'ioc', 'ioc_value': str(val), 'ioc_type': str(typ), 'ioc_source': str(src), 'cve_id': str(cve), 'threat_type': str(threat), 'timestamp': str(row.get('timestamp', ''))}])
+            text = f"IOC: {val}. Tipo: {typ}. Fonte: {src}. CVE: {cve}. Threat: {threat}. Severità: {sev}."
+            collection.add(ids=[doc_id], documents=[text], metadatas=[{'source': 'fenrir', 'type': 'ioc', 'ioc_value': str(val), 'ioc_type': str(typ), 'ioc_source': str(src), 'cve_id': str(cve), 'threat_type': str(threat), 'severity': str(sev), 'timestamp': str(row.get('timestamp', ''))}])
             count += 1
         conn.close()
         return count

@@ -307,3 +307,19 @@ class SecurityAuditor:
         lines.append("---")
         lines.append("*Audit generato automaticamente dal Security Auditor di Ragnarök.*")
         return "\n".join(lines)
+
+    def save_report(self, output_dir: Optional[str] = None, audit: Optional[Dict[str, Any]] = None) -> str:
+        """Genera e salva il report Markdown; restituisce il percorso del file."""
+        if output_dir is None:
+            output_dir = os.environ.get(
+                "ASGARD_REPORT_DIR",
+                os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "..", "output", "reports"),
+            )
+        os.makedirs(output_dir, exist_ok=True)
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
+        path = os.path.join(output_dir, f"asgard_security_audit_{ts}.md")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(self.format_report(audit=audit))
+        logger.info(f"Security audit report salvato: {path}")
+        return path

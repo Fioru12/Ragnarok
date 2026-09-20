@@ -37,9 +37,9 @@ def temp_asgard_root(tmp_path):
     fd.mkdir()
     fdb = fd / "fenrir.db"
     conn = sqlite3.connect(str(fdb))
-    conn.execute("CREATE TABLE IF NOT EXISTS ioc (id INTEGER PRIMARY KEY, value TEXT, type TEXT, source TEXT, cve_id TEXT, threat_type TEXT, description TEXT, timestamp TEXT)")
-    conn.execute("INSERT INTO ioc VALUES (1,?,?,?,?,?,?,?)", ("192.168.1.100", "ipv4addr", "CISA", "CVE-2024", "c2", "Malicious", "2026-01-15"))
-    conn.execute("INSERT INTO ioc VALUES (2,?,?,?,?,?,?,?)", ("evil.com", "domain", "OTX", "N/A", "phishing", "Phishing", "2026-01-15"))
+    conn.execute("CREATE TABLE IF NOT EXISTS ioc (id INTEGER PRIMARY KEY, value TEXT, type TEXT, source TEXT, cve_id TEXT, threat_type TEXT, severity TEXT, description TEXT, timestamp TEXT)")
+    conn.execute("INSERT INTO ioc VALUES (1,?,?,?,?,?,?,?,?)", ("192.168.1.100", "ipv4addr", "CISA", "CVE-2024", "c2", "CRITICAL", "Malicious", "2026-01-15"))
+    conn.execute("INSERT INTO ioc VALUES (2,?,?,?,?,?,?,?,?)", ("evil.com", "domain", "OTX", "N/A", "phishing", "MEDIUM", "Phishing", "2026-01-15"))
     conn.commit()
     conn.close()
     md = tmp_path / "Mjolnir" / "output"
@@ -78,6 +78,30 @@ def test_rag_index_fenrir(temp_asgard_root):
         idx = AsgardIndexer(asgard_root=temp_asgard_root, db_path=t)
         count = idx.index_fenrir()
         assert count >= 1
+        del idx
+    finally:
+        safe_rmtree(t)
+
+
+def test_rag_index_fenrir_preserves_severity_in_metadata(temp_asgard_root):
+    """
+    Regression test: index_fenrir() read `sev = row.get('severity')` from
+    each IOC row but never actually put it into the indexed document text
+    or metadata - every other field (value, type, source, cve_id,
+    threat_type) was included, severity alone was silently dropped. Found
+    via pyflakes flagging `sev` as assigned-but-unused. A RAG query or
+    security-score calculation filtering/prioritizing by IOC severity had
+    no way to do so, since the data never made it into the index.
+    """
+    from rag.indexer import AsgardIndexer
+    t = tempfile.mkdtemp()
+    try:
+        idx = AsgardIndexer(asgard_root=temp_asgard_root, db_path=t)
+        idx.index_fenrir()
+        collection = idx.client.get_collection("fenrir_ioc")
+        got = collection.get(ids=["ioc-1"], include=["documents", "metadatas"])
+        assert got["metadatas"][0]["severity"] == "CRITICAL"
+        assert "CRITICAL" in got["documents"][0]
         del idx
     finally:
         safe_rmtree(t)
@@ -1616,6 +1640,126 @@ def test_security_audit_tls_disabled_generates_finding():
     finally:
         if saved is not None:
             os.environ["ASGARD_TLS"] = saved
+
+
+def test_security_auditor_save_report_writes_file(tmp_path):
+    """
+    Regression test: rag/cli.py's `cmd_security --save` called a
+    SecurityAuditor.save_report() method that didn't exist (AttributeError
+    on every call) - the class only had format_report(), no save-to-file
+    method, unlike the analogous ReportExporter.save(). Added save_report()
+    mirroring that pattern.
+    """
+    from rag.security import SecurityAuditor
+    auditor = SecurityAuditor()
+    path = auditor.save_report(output_dir=str(tmp_path))
+    assert os.path.exists(path)
+    with open(path, "r", encoding="utf-8") as f:
+        content = f.read()
+    assert "Security Audit Report" in content
+
+
+# ======================================================================
+# CLI (rag/cli.py)
+# ======================================================================
+
+
+def _patch_security_history_db(monkeypatch, db_path):
+    """cmd_security_history() imports SecurityScoreHistory locally (inside
+    the function body), so it can't be patched via the cli module - patch
+    the class's own __init__ default instead, isolating tests from the
+    suite's real history DB."""
+    import rag.security_history as sh_module
+    orig_init = sh_module.SecurityScoreHistory.__init__
+    monkeypatch.setattr(
+        sh_module.SecurityScoreHistory, "__init__",
+        lambda self, db_path=db_path: orig_init(self, db_path=db_path),
+    )
+
+
+def test_cli_cmd_security_history_reports_no_data_when_empty(tmp_path, capsys, monkeypatch):
+    """No history yet -> prints the "no data" message, doesn't crash."""
+    from rag import cli as cli_module
+    import argparse
+
+    _patch_security_history_db(monkeypatch, str(tmp_path / "history.db"))
+    args = argparse.Namespace(days=30, record=False)
+    cli_module.cmd_security_history(args)
+    out = capsys.readouterr().out
+    assert "Nessun dato storico" in out
+
+
+def test_cli_cmd_security_history_record_then_shows_summary(tmp_path, capsys, monkeypatch):
+    """
+    Regression test: rag/cli.py's argparse tree wired the "security-history"
+    subcommand to `cmd_security_history`, a function that was never
+    defined anywhere in the file (NameError). Because parser.set_defaults()
+    resolves that name immediately when main()'s parser is built - not only
+    when that specific subcommand is chosen - this crashed EVERY invocation
+    of the CLI, not just `security-history`. Now implemented: --record runs
+    a real audit and persists it, then prints the summary.
+    """
+    from rag import cli as cli_module
+    import argparse
+
+    _patch_security_history_db(monkeypatch, str(tmp_path / "history.db"))
+    args = argparse.Namespace(days=30, record=True)
+    cli_module.cmd_security_history(args)
+    out = capsys.readouterr().out
+    assert "Punteggio registrato" in out
+    assert "Storico security score" in out
+    assert "Trend" in out
+
+
+def test_cli_cmd_security_prints_report_without_save(capsys):
+    """
+    Regression test: cmd_security called auditor.run_audit() and
+    auditor.save_report() with save=True - but SecurityAuditor only ever
+    had run_full_audit() and (before the fix above) no save_report() at
+    all. Every real `python -m rag.cli security` invocation crashed with
+    AttributeError. Now uses run_full_audit() + format_report().
+    """
+    from rag import cli as cli_module
+    import argparse
+
+    args = argparse.Namespace(save=False, out=None)
+    cli_module.cmd_security(args)
+    out = capsys.readouterr().out
+    assert "Security Audit Report" in out
+
+
+def test_cli_cmd_security_save_writes_file(tmp_path, capsys):
+    from rag import cli as cli_module
+    import argparse
+
+    args = argparse.Namespace(save=True, out=str(tmp_path))
+    cli_module.cmd_security(args)
+    out = capsys.readouterr().out
+    assert "Report sicurezza salvato" in out
+    saved_files = list(tmp_path.glob("*.md"))
+    assert len(saved_files) == 1
+
+
+def test_cli_parser_builds_without_crashing_for_every_subcommand():
+    """
+    Regression test: building main()'s argparse tree referenced
+    `cmd_security_history` before it was defined anywhere, which raised
+    NameError as soon as main() ran - for ANY subcommand, not just
+    security-history, since parser construction happens unconditionally
+    before argparse even looks at argv. This exercises the same
+    construction path main() does, without actually running a command.
+    """
+    import argparse
+    from rag import cli as cli_module
+
+    parser = argparse.ArgumentParser(prog="rag")
+    sub = parser.add_subparsers(dest="command", required=True)
+    p_sec_hist = sub.add_parser("security-history")
+    p_sec_hist.add_argument("--days", type=int, default=30)
+    p_sec_hist.add_argument("--record", action="store_true")
+    # This is the exact line that used to raise NameError.
+    p_sec_hist.set_defaults(func=cli_module.cmd_security_history)
+    assert callable(p_sec_hist.get_default("func"))
 
 
 # ======================================================================
