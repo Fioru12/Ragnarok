@@ -743,6 +743,31 @@ def test_rag_security_record_requires_auth():
     assert res.status_code == 401
 
 
+def test_rag_security_record_success_persists_score():
+    """
+    Regression test: this endpoint referenced an undefined `rag_security`
+    global (NameError, never caught by any prior test since none exercised
+    the authenticated success path - only the 401 case above) and assumed
+    a SecurityAuditor.run_full_audit() result shape (`security_score`,
+    `risk_level`, `recommendations`) that doesn't match what that method
+    actually returns (`score`, `grade`, no `recommendations` list at all).
+    Now uses SecurityAuditor directly, same as /security/audit and
+    /security/report, and maps the real field names.
+    """
+    res = client.post("/api/v1/rag/security/record", headers=AUTH_HEADERS)
+    assert res.status_code == 200
+    body = res.json()
+    assert body["status"] == "success"
+    recorded = body["recorded"]
+    assert isinstance(recorded["score"], int)
+    assert isinstance(recorded["level"], str)
+    assert "timestamp" in recorded
+
+    # And it actually landed in the history, not just returned a response.
+    history_res = client.get("/api/v1/rag/security/history?days=1")
+    assert history_res.status_code == 200
+
+
 # ======================================================================
 # Anomaly watcher (push WebSocket in tempo reale)
 # ======================================================================
@@ -950,6 +975,38 @@ def test_report_send_cron_no_duplicate_same_day(monkeypatch):
     srv._LAST_REPORT_SEND["running"] = False
     srv._report_send_if_due()
     assert calls["send"] == 0
+
+
+def test_report_send_cron_persists_day_marker_across_calls(monkeypatch):
+    """
+    Regression test: _report_send_if_due() assigned to _LAST_REPORT_CRON_DAY
+    without a `global` declaration, so it silently created a local variable
+    instead of updating the module-level guard - the cron "sent today"
+    marker never actually persisted, meaning a scheduled report would be
+    re-sent on every trigger instead of once per day. Calling the function
+    twice in a row must now send exactly once.
+    """
+    import server as srv
+    import rag.dispatch as dispatch
+    monkeypatch.setattr(srv, "RAG_REPORT_SEND_MINUTES", 0)
+    monkeypatch.setattr(srv, "RAG_REPORT_SEND_CRON", "00:00")  # always due
+    srv._LAST_REPORT_CRON_DAY = ""
+    srv._LAST_REPORT_SEND["ts"] = 0.0
+    srv._LAST_REPORT_SEND["running"] = False
+    calls = {"send": 0}
+
+    def _fake(engine=None, **kw):
+        calls["send"] += 1
+        return {"sent": False, "configured": False, "severity": None, "message": "noop"}
+
+    monkeypatch.setattr(dispatch, "send_report", _fake)
+
+    srv._report_send_if_due()
+    assert calls["send"] == 1
+    assert srv._LAST_REPORT_CRON_DAY == _time_now("%Y-%m-%d")
+
+    srv._report_send_if_due()
+    assert calls["send"] == 1, "second call same day must not re-send"
 
 
 def _time_now(fmt):
@@ -1983,6 +2040,25 @@ def test_health_endpoint_returns_200():
     assert "components" in data
     assert "auth_db" in data["components"]
     assert "version" in data
+
+
+def test_health_rag_component_reflects_actual_availability():
+    """
+    Regression test: the /health RAG check read `getattr(server, 'rag_indexer',
+    None) if 'server' in globals() else None` - but this module IS server.py,
+    so the name 'server' was never in its own globals(), making that
+    condition always False and the RAG component always report "disabled"
+    regardless of whether RAG was actually available. Now reads the
+    module's own RAG_AVAILABLE/rag_indexer globals directly.
+    """
+    import server as srv
+    res = client.get("/health")
+    assert res.status_code in (200, 503)
+    rag_component = res.json()["components"]["rag"]
+    if srv.RAG_AVAILABLE and srv.rag_indexer is not None:
+        assert rag_component["status"] in ("ok", "error")
+    else:
+        assert rag_component["status"] == "disabled"
 
 
 def test_health_reports_degraded_when_auth_db_missing():

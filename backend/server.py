@@ -9,7 +9,7 @@ import re
 import asyncio
 import urllib.request
 import urllib.error
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Header, Depends, Request, Response
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 
@@ -49,7 +49,6 @@ from pathlib import Path
 # by endpoints remaining in this file are imported here.
 from auth import (
     require_role,
-    list_users,
 )
 
 # --- Asgard RAG Engine (Retrieval-Augmented Generation) ---
@@ -305,7 +304,6 @@ def _compute_security_score(collections: Dict[str, int]) -> Dict[str, Any]:
     """Score determinaristico 0-10 basato su indicatori oggettivi (nessun LLM)."""
     alerts = collections.get("heimdall_alerts", 0)
     ioc = collections.get("fenrir_ioc", 0)
-    triage = collections.get("mjolnir_triage", 0)
     scans = collections.get("bifrost_scans", 0)
     compliance = collections.get("forseti_compliance", 0)
     playbooks = collections.get("sleipnir_playbooks", 0)
@@ -623,8 +621,7 @@ def health():
 
     # --- RAG / ChromaDB ---
     try:
-        rag_indexer = getattr(server, 'rag_indexer', None) if 'server' in globals() else None
-        if rag_indexer:
+        if RAG_AVAILABLE and rag_indexer is not None:
             stats = rag_indexer.get_stats()
             components["rag"] = {"status": "ok", "documents": stats.get("total_documents", 0)}
         else:
@@ -1418,17 +1415,20 @@ async def rag_security_trend_endpoint(days: int = 30):
 
 @app.post("/api/v1/rag/security/record")
 async def rag_security_record_endpoint(user: dict = Depends(require_role("admin"))):
-    """Registra il security score corrente nello storico (richiede auth)."""
-    if not RAG_AVAILABLE or rag_security is None:
-        raise HTTPException(status_code=503, detail="RAG Engine non disponibile")
+    """Registra il security score corrente nello storico (richiede auth).
+
+    Uses SecurityAuditor (same as /security/audit and /security/report,
+    neither of which gates on RAG_AVAILABLE - this check independently
+    audits Asgard's own configuration, it doesn't read the RAG index).
+    """
     try:
-        audit = rag_security.run_audit()
+        from rag.security import SecurityAuditor
         from rag.security_history import SecurityScoreHistory
+        audit = SecurityAuditor().run_full_audit()
         result = SecurityScoreHistory().record_score(
-            score=audit["security_score"],
-            level=audit["risk_level"],
-            findings_count=len(audit["findings"]),
-            recommendations_count=len(audit["recommendations"]),
+            score=audit["score"],
+            level=audit["grade"],
+            findings_count=audit["total_findings"],
         )
         return {"status": "success", "recorded": result}
     except Exception as e:
@@ -1656,6 +1656,7 @@ def _report_send_cron_due(now):
 
 def _report_send_if_due():
     """Invia il digest del report proattivo se un trigger è scaduto."""
+    global _LAST_REPORT_CRON_DAY
     if not RAG_AVAILABLE or rag_insights is None:
         return
     if RAG_REPORT_SEND_MINUTES <= 0 and _report_send_cron_parsed() is None:
@@ -1712,6 +1713,44 @@ from routers.tenants_agents import router as tenants_agents_router
 app.include_router(tenants_agents_router)
 
 
+def _generate_self_signed_cert(directory: Path):
+    """Genera un certificato self-signed per dev/test (stdlib + cryptography)."""
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    import datetime as _dt
+
+    directory.mkdir(parents=True, exist_ok=True)
+    key_path = directory / "key.pem"
+    cert_path = directory / "cert.pem"
+
+    if key_path.exists() and cert_path.exists():
+        return str(cert_path), str(key_path)
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(_dt.datetime.now(_dt.timezone.utc))
+        .not_valid_after(_dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(days=365))
+        .add_extension(x509.SubjectAlternativeName([x509.DNSName("localhost")]), critical=False)
+        .sign(key, hashes.SHA256())
+    )
+
+    key_path.write_bytes(key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.TraditionalOpenSSL,
+        serialization.NoEncryption(),
+    ))
+    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    return str(cert_path), str(key_path)
+
+
 if __name__ == "__main__":
     import uvicorn
 
@@ -1749,41 +1788,3 @@ if __name__ == "__main__":
         ssl_keyfile=ssl_keyfile,
         ssl_certfile=ssl_certfile,
     )
-
-
-def _generate_self_signed_cert(directory: Path):
-    """Genera un certificato self-signed per dev/test (stdlib + cryptography)."""
-    from cryptography import x509
-    from cryptography.x509.oid import NameOID
-    from cryptography.hazmat.primitives import hashes, serialization
-    from cryptography.hazmat.primitives.asymmetric import rsa
-    import datetime as _dt
-
-    directory.mkdir(parents=True, exist_ok=True)
-    key_path = directory / "key.pem"
-    cert_path = directory / "cert.pem"
-
-    if key_path.exists() and cert_path.exists():
-        return str(cert_path), str(key_path)
-
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
-    cert = (
-        x509.CertificateBuilder()
-        .subject_name(name)
-        .issuer_name(name)
-        .public_key(key.public_key())
-        .serial_number(x509.random_serial_number())
-        .not_valid_before(_dt.datetime.now(_dt.timezone.utc))
-        .not_valid_after(_dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(days=365))
-        .add_extension(x509.SubjectAlternativeName([x509.DNSName("localhost")]), critical=False)
-        .sign(key, hashes.SHA256())
-    )
-
-    key_path.write_bytes(key.private_bytes(
-        serialization.Encoding.PEM,
-        serialization.PrivateFormat.TraditionalOpenSSL,
-        serialization.NoEncryption(),
-    ))
-    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
-    return str(cert_path), str(key_path)
