@@ -577,7 +577,7 @@
 
         const tabMap = ['overview', 'heimdall', 'mjolnir', 'bifrost', 'inventory', 'yggdrasil', 'fenrir', 'hunt', 'sleipnir', 'reports', 'ai', 'setup'];
         let chatHistory = [];
-        let telemetryData = new Array(45).fill(0).map(() => Math.floor(Math.random() * 40) + 10);
+        let telemetryData = new Array(45).fill(0);
         let totalExecs = 0;
 
         window.addEventListener('DOMContentLoaded', () => {

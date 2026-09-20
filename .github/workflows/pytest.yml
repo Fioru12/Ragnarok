@@ -25,12 +25,9 @@ jobs:
         pip install -r backend/requirements.txt -r backend/requirements-rag.txt
 
     - name: Run unit tests with pytest
-      # Two separate invocations, not one `pytest` covering both directories:
-      # tests/ and backend/tests/ both import server.py/auth.py at module
-      # scope with process-wide side effects (DB init, generated API keys),
-      # and running them together in one pytest process causes state to leak
-      # between the two suites (110+ spurious 401s). Each directory passes
-      # cleanly on its own - verified locally before making this change.
+      # A single invocation: root conftest.py pins deterministic env
+      # (RAGNAROK_API_KEY, inert anomaly watcher) before any test module
+      # imports server.py, so import-order state leaks between suites
+      # (spurious 401s) cannot happen.
       run: |
-        pytest tests/ -v
-        pytest backend/tests/ -v
+        pytest tests/ backend/tests/ -v
