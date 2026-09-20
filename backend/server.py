@@ -4,7 +4,6 @@ import secrets
 import subprocess
 import sqlite3
 import json
-import glob
 import time
 import re
 import asyncio
@@ -556,85 +555,8 @@ class TelemetryBroadcaster:
 
 telemetry = TelemetryBroadcaster()
 
-class OllamaStatus(BaseModel):
-    available: bool
-    models: List[str] = []
-    url: str = "http://localhost:11434"
-
-@app.get("/api/v1/ollama/status")
-def get_ollama_status():
-    try:
-        url = "http://localhost:11434/api/tags"
-        req = urllib.request.Request(url, headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            models = [m.get("name", "") for m in data.get("models", [])]
-            return {"available": True, "models": models, "url": "http://localhost:11434"}
-    except Exception:
-        return {"available": False, "models": [], "url": "http://localhost:11434"}
-
-@app.get("/api/v1/mitre/matrix")
-def get_mitre_matrix():
-    """Returns the MITRE ATT&CK Matrix mapping with detected techniques across Asgard suite modules."""
-    return {
-        "tactics": [
-            {
-                "id": "TA0043",
-                "name": "Reconnaissance",
-                "techniques": [
-                    {"id": "T1046", "name": "Network Service Discovery", "module": "Bifrost", "status": "active"},
-                    {"id": "T1595", "name": "Active Scanning", "module": "Bifrost", "status": "active"}
-                ]
-            },
-            {
-                "id": "TA0001",
-                "name": "Initial Access",
-                "techniques": [
-                    {"id": "T1190", "name": "Exploit Public-Facing Application", "module": "Bifrost / Fenrir", "status": "monitored"}
-                ]
-            },
-            {
-                "id": "TA0006",
-                "name": "Credential Access",
-                "techniques": [
-                    {"id": "T1110", "name": "Brute Force", "module": "Heimdall", "status": "active"},
-                    {"id": "T1110.001", "name": "Password Guessing", "module": "Heimdall", "status": "active"},
-                    {"id": "T1087.002", "name": "Domain Account Discovery", "module": "Yggdrasil", "status": "active"}
-                ]
-            },
-            {
-                "id": "TA0002",
-                "name": "Execution",
-                "techniques": [
-                    {"id": "T1059", "name": "Command and Scripting Interpreter", "module": "Mjolnir", "status": "monitored"}
-                ]
-            },
-            {
-                "id": "TA0005",
-                "name": "Defense Evasion",
-                "techniques": [
-                    {"id": "T1070", "name": "Indicator Removal", "module": "Mjolnir", "status": "monitored"}
-                ]
-            }
-        ]
-    }
-
-@app.get("/api/v1/bifrost/topology")
-def get_bifrost_topology():
-    """Returns network topology graph nodes & edges from Bifrost scanner data for interactive frontend rendering."""
-    return {
-        "nodes": [
-            {"id": "gateway", "label": "Security Gateway / Router", "type": "router", "ip": "192.168.1.1"},
-            {"id": "host-100", "label": "Web Application Server", "type": "server", "ip": "192.168.1.100", "ports": [80, 443]},
-            {"id": "host-150", "label": "Active Directory DC", "type": "dc", "ip": "192.168.1.150", "ports": [53, 88, 389, 445]},
-            {"id": "host-200", "label": "Linux SSH Host", "type": "server", "ip": "192.168.1.200", "ports": [22]}
-        ],
-        "edges": [
-            {"source": "gateway", "target": "host-100"},
-            {"source": "gateway", "target": "host-150"},
-            {"source": "gateway", "target": "host-200"}
-        ]
-    }
+from routers.info import router as info_router
+app.include_router(info_router)
 
 class ActionRequest(BaseModel):
     module: str
@@ -997,90 +919,8 @@ def get_audit_log(limit: int = 50, offset: int = 0, user: dict = Depends(require
 
     return {"events": events, "total": total, "limit": limit, "offset": offset}
 
-@app.get("/api/v1/reports")
-def list_reports():
-    reports = []
-    for pattern in [
-        os.path.join(ASGARD_ROOT, "Mjolnir", "output", "*.md"),
-        os.path.join(ASGARD_ROOT, "Yggdrasil", "reports", "*.md"),
-    ]:
-        for filepath in sorted(glob.glob(pattern), key=os.path.getmtime, reverse=True)[:20]:
-            stat = os.stat(filepath)
-            reports.append({
-                "filename": os.path.basename(filepath),
-                "path": filepath,
-                "size_bytes": stat.st_size,
-                "modified": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(stat.st_mtime)),
-                "source": "Mjolnir" if "Mjolnir" in filepath else "Yggdrasil",
-            })
-    return {"reports": reports}
-
-@app.get("/api/v1/reports/read")
-def read_report(path: str):
-    allowed_dirs = [
-        os.path.realpath(os.path.join(ASGARD_ROOT, "Mjolnir", "output")),
-        os.path.realpath(os.path.join(ASGARD_ROOT, "Yggdrasil", "reports")),
-        os.path.realpath(os.path.join(ASGARD_ROOT, "reports")),
-        os.path.realpath(os.path.join(ASGARD_ROOT, "output")),
-    ]
-    resolved_path = os.path.realpath(os.path.abspath(path))
-    
-    # Path traversal protection: ensure path is strictly inside one of the allowed report directories
-    is_safe = False
-    for ad in allowed_dirs:
-        try:
-            if os.path.commonpath([resolved_path, ad]) == ad:
-                is_safe = True
-                break
-        except ValueError:
-            continue
-
-    if not is_safe:
-        raise HTTPException(status_code=403, detail="Access denied: report path must be inside authorized report directories")
-
-    if not os.path.isfile(resolved_path):
-        raise HTTPException(status_code=404, detail="Report not found")
-    with open(resolved_path, "r", encoding="utf-8", errors="replace") as f:
-        content = f.read()
-    return {"filename": os.path.basename(resolved_path), "content": content}
-
-@app.get("/api/v1/hunt")
-def threat_hunt(q: Optional[str] = ""):
-    db_path = os.path.join(ASGARD_ROOT, "Fenrir", "fenrir.db")
-    if not os.path.exists(db_path):
-        return {"results": [], "total": 0, "message": "Fenrir database not found. Run Fenrir update first."}
-    
-    import sqlite3
-    try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        if q:
-            cursor.execute("""
-                SELECT indicator_type, indicator, name, source, severity, date_added
-                FROM iocs WHERE indicator LIKE ? OR name LIKE ? OR indicator_type LIKE ?
-                ORDER BY id DESC LIMIT 100
-            """, (f"%{q}%", f"%{q}%", f"%{q}%"))
-        else:
-            cursor.execute("""
-                SELECT indicator_type, indicator, name, source, severity, date_added
-                FROM iocs ORDER BY id DESC LIMIT 100
-            """)
-        rows = cursor.fetchall()
-        conn.close()
-
-        results = []
-        for r in rows:
-            results.append({
-                "indicator_type": r[0],
-                "indicator": r[1],
-                "name": r[2],
-                "source": r[3],
-                "severity": r[4],
-                "date_added": r[5]
-            })
-        return {"results": results, "total": len(results)}
-    except Exception as e:
-        return {"results": [], "total": 0, "error": str(e)}
+from routers.intel import router as intel_router
+app.include_router(intel_router)
 
 @app.websocket("/ws/telemetry")
 async def websocket_telemetry(ws: WebSocket):
