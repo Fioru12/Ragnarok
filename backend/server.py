@@ -742,8 +742,11 @@ def metrics():
     except Exception:
         lines.append("asgard_active_tenants_total 0")
 
-    # Backup status
-    backup_dir = "backend/backups"
+    # Backup status (absolute path: real backups live in <backend>/backups
+    # per backup.py — the old cwd-relative "backend/backups" never existed
+    # under Docker WORKDIR /app/Ragnarok/backend, so this metric was silently
+    # absent in production).
+    backup_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "backups")
     if os.path.isdir(backup_dir):
         backups = sorted([f for f in os.listdir(backup_dir) if f.endswith(".zip")])
         if backups:

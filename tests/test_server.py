@@ -21,22 +21,31 @@ os.environ.setdefault("RAG_ANOMALY_WATCH_MINUTES", "0")
 # i test dedicati lo abilitano via monkeypatch, senza far partire invii reali.
 os.environ.setdefault("RAG_REPORT_SEND_MINUTES", "0")
 
+# DB isolation: Ragnarok/conftest.py already points the session at temp DBs
+# before any import happens. Reuse those paths when present (so _AUTH_DB_PATH
+# below is the database auth is actually bound to, with schema created on
+# import); otherwise fall back to creating our own temp files, e.g. if this
+# module is ever executed without its package conftest.
+def _ensure_temp_env(name, prefix, suffix):
+    existing = os.getenv(name)
+    if existing:
+        return existing
+    _fd, _path = tempfile.mkstemp(prefix=prefix, suffix=suffix)
+    os.close(_fd)
+    os.environ[name] = _path
+    return _path
+
 # Point the audit DB at an isolated temp file so tests never touch (or get
 # polluted by) a real ragnarok_audit.db, and so the schema is created fresh.
-_AUDIT_DB_FD, _AUDIT_DB_PATH = tempfile.mkstemp(prefix="ragnarok_audit_test_", suffix=".db")
-os.close(_AUDIT_DB_FD)
-os.environ.setdefault("RAGNAROK_AUDIT_DB_PATH", _AUDIT_DB_PATH)
+_AUDIT_DB_PATH = _ensure_temp_env("RAGNAROK_AUDIT_DB_PATH", "ragnarok_audit_test_", ".db")
 
 # Same for the setup wizard's persisted env file: never touch a real one.
-_SETUP_ENV_FD, _SETUP_ENV_PATH = tempfile.mkstemp(prefix="ragnarok_setup_test_", suffix=".env")
-os.close(_SETUP_ENV_FD)
-os.remove(_SETUP_ENV_PATH)  # start absent, as a fresh install would be
-os.environ.setdefault("RAGNAROK_SETUP_ENV_PATH", _SETUP_ENV_PATH)
+_SETUP_ENV_PATH = _ensure_temp_env("RAGNAROK_SETUP_ENV_PATH", "ragnarok_setup_test_", ".env")
+if os.path.exists(_SETUP_ENV_PATH):
+    os.remove(_SETUP_ENV_PATH)  # start absent, as a fresh install would be
 
 # Isolate the auth DB and use a fixed secret for deterministic tests.
-_AUTH_DB_FD, _AUTH_DB_PATH = tempfile.mkstemp(prefix="ragnarok_auth_test_", suffix=".db")
-os.close(_AUTH_DB_FD)
-os.environ.setdefault("RAGNAROK_AUTH_DB_PATH", _AUTH_DB_PATH)
+_AUTH_DB_PATH = _ensure_temp_env("RAGNAROK_AUTH_DB_PATH", "ragnarok_auth_test_", ".db")
 os.environ.setdefault("RAGNAROK_AUTH_SECRET", "test-secret-do-not-use-in-prod")
 os.environ.setdefault("RAGNAROK_SESSION_TTL", "3600")
 
@@ -2030,9 +2039,11 @@ def test_rate_limit_blocks_excessive_traffic():
 
 def test_health_endpoint_returns_200():
     """Health endpoint returns 200 with component status."""
-    # Restore auth DB path (previous tests may have monkeypatched it)
+    # Restore auth DB path (previous tests may have monkeypatched it).
+    # Uses the isolated temp DB created at module top: initialized on import,
+    # never touches a real DB, and independent of the pytest cwd.
     import auth as auth_module
-    auth_module.AUTH_DB_PATH = str(Path("backend/ragnarok_auth.db").resolve())
+    auth_module.AUTH_DB_PATH = _AUTH_DB_PATH
     res = client.get("/health")
     assert res.status_code == 200
     data = res.json()
@@ -2095,8 +2106,9 @@ def test_metrics_expose_rag_documents():
 
 def test_metrics_expose_backup_age():
     """Metrics include backup age when backups exist."""
-    # Create a fake backup
-    backup_dir = "backend/backups"
+    # Create a fake backup (absolute path: metrics resolves <backend>/backups
+    # from server.py's location, not from the pytest cwd).
+    backup_dir = os.path.join(BACKEND_DIR, "backups")
     os.makedirs(backup_dir, exist_ok=True)
     backup_path = os.path.join(backup_dir, "test_backup.zip")
     with open(backup_path, "w") as f:
