@@ -11,7 +11,7 @@ import urllib.request
 import urllib.error
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import Response
 
 
 # Global state
@@ -665,16 +665,9 @@ def metrics():
         media_type="text/plain; version=0.0.4",
     )
 
-@app.get("/")
-def serve_frontend():
-    index_path = os.path.join(FRONTEND_DIR, "index.html")
-    if os.path.exists(index_path):
-        return FileResponse(index_path)
-    return {"status": "online", "system": "Asgard Enterprise SOC"}
-
-@app.get("/favicon.ico", include_in_schema=False)
-def favicon():
-    return Response(status_code=204)
+# --- Static pages (/, favicon, dashboards) live in routers/pages.py ---
+from routers.pages import router as pages_router
+app.include_router(pages_router)
 
 async def _check_module_health(mod_key: str, info: Dict[str, Any]) -> Dict[str, Any]:
     """Real health check: try to actually run the module's entry point with
@@ -726,35 +719,7 @@ async def _check_module_health(mod_key: str, info: Dict[str, Any]) -> Dict[str, 
         }
 
 
-@app.get("/api/v1/status")
-async def get_status():
-    now = time.time()
-    for mod_key, info in MODULE_STATUS.items():
-        if now - info["last_check"] < 30:
-            continue
-        result = await _check_module_health(mod_key, info)
-        info["healthy"] = result["healthy"]
-        info["health_status"] = result["status"]
-        info["health_error"] = result["error"]
-        info["last_check"] = now
-
-    online = sum(1 for m in MODULE_STATUS.values() if m["healthy"])
-    return {
-        "status": "online",
-        "uptime_seconds": int(time.time() - START_TIME),
-        "modules": {
-            k: {
-                "name": v["name"],
-                "healthy": v["healthy"],
-                "health_status": v.get("health_status", "unknown"),
-                "health_error": v.get("health_error"),
-            }
-            for k, v in MODULE_STATUS.items()
-        },
-        "online_count": online,
-        "total_count": len(MODULE_STATUS),
-        "executions": EXEC_COUNTER,
-    }
+# --- /api/v1/status lives in routers/ops.py (same path) ---
 
 
 # --- Backup/restore & audit log live in routers/ops.py (same paths) ---
@@ -1053,36 +1018,7 @@ async def chat_orchestrator(req: ChatRequest, user: dict = Depends(require_role(
     except Exception as e:
         return {"status": "error", "output": str(e)}
 
-# ======================================================================
-# RAG Dashboard
-# ======================================================================
-
-import pathlib
-_DASHBOARD_DIR = pathlib.Path(__file__).parent / "dashboard"
-_DASHBOARD_DIR.mkdir(exist_ok=True)
-_DASHBOARD_HTML = _DASHBOARD_DIR / "index.html"
-
-if not _DASHBOARD_HTML.exists():
-    _DASHBOARD_HTML.write_text("<!DOCTYPE html><html><head><title>Asgard RAG</title>")
-    _DASHBOARD_HTML.write_text("<style>body{font-family:sans-serif;background:#0f172a;color:#e2e8f0;padding:2rem}</style>")
-    _DASHBOARD_HTML.write_text("</head><body><h1>Asgard RAG Dashboard</h1>")
-    _DASHBOARD_HTML.write_text("<div id='stats'></div>")
-    _DASHBOARD_HTML.write_text("<script>fetch('/api/v1/rag/stats').then(r=>r.json()).then(s=>{")
-    _DASHBOARD_HTML.write_text("document.getElementById('stats').innerHTML='<pre>'+JSON.stringify(s,null,2)+'</pre>'})")
-    _DASHBOARD_HTML.write_text("</script></body></html>")
-
-@app.get("/dashboard")
-async def rag_dashboard():
-    return FileResponse(str(_DASHBOARD_HTML))
-
-
-@app.get("/security")
-async def rag_security_dashboard():
-    """Security Audit Dashboard."""
-    security_html = _DASHBOARD_DIR / "security.html"
-    if not security_html.exists():
-        raise HTTPException(status_code=404, detail="Security dashboard non trovata")
-    return FileResponse(str(security_html))
+# --- RAG/security dashboards live in routers/pages.py (same paths) ---
 
 
 # ======================================================================

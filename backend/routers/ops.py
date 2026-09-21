@@ -88,3 +88,44 @@ def get_audit_log(limit: int = 50, offset: int = 0, user: dict = Depends(require
         events.append({"id": row_id, "timestamp": ts, "type": ev_type, "payload": parsed_payload})
 
     return {"events": events, "total": total, "limit": limit, "offset": offset}
+
+
+@router.get("/api/v1/status")
+async def get_status():
+    """Module health overview (public, cached 30s per module).
+
+    Moved verbatim from server.py; server-owned MODULE_STATUS/START_TIME/
+    EXEC_COUNTER/_check_module_health are imported lazily (same pattern as
+    the backup handlers above), so mutations still hit the same objects.
+    """
+    import time as _time
+
+    from server import MODULE_STATUS, START_TIME, EXEC_COUNTER, _check_module_health
+
+    now = _time.time()
+    for mod_key, info in MODULE_STATUS.items():
+        if now - info["last_check"] < 30:
+            continue
+        result = await _check_module_health(mod_key, info)
+        info["healthy"] = result["healthy"]
+        info["health_status"] = result["status"]
+        info["health_error"] = result["error"]
+        info["last_check"] = now
+
+    online = sum(1 for m in MODULE_STATUS.values() if m["healthy"])
+    return {
+        "status": "online",
+        "uptime_seconds": int(_time.time() - START_TIME),
+        "modules": {
+            k: {
+                "name": v["name"],
+                "healthy": v["healthy"],
+                "health_status": v.get("health_status", "unknown"),
+                "health_error": v.get("health_error"),
+            }
+            for k, v in MODULE_STATUS.items()
+        },
+        "online_count": online,
+        "total_count": len(MODULE_STATUS),
+        "executions": EXEC_COUNTER,
+    }
