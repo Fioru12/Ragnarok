@@ -26,49 +26,43 @@ def get_ollama_status():
 
 @router.get("/api/v1/mitre/matrix")
 def get_mitre_matrix():
-    """Returns the MITRE ATT&CK Matrix mapping with detected techniques across Asgard suite modules."""
+    """Returns the MITRE ATT&CK Matrix mapping with detected techniques across Asgard suite modules.
+
+    Single source of truth: core.mitre.MITRE_ATTACK_MATRIX (the same data
+    served by /api/v1/dashboard/mitre-matrix). Previously this endpoint
+    carried a hardcoded copy that had drifted out of sync with it.
+    """
+    from core.mitre import MITRE_ATTACK_MATRIX, TACTIC_IDS
+
+    by_tactic = {}
+    for tech in MITRE_ATTACK_MATRIX.values():
+        by_tactic.setdefault(tech["tactic"], []).append(tech)
     return {
         "tactics": [
             {
-                "id": "TA0043",
-                "name": "Reconnaissance",
+                "id": TACTIC_IDS.get(tactic, tactic),
+                "name": tactic,
                 "techniques": [
-                    {"id": "T1046", "name": "Network Service Discovery", "module": "Bifrost", "status": "active"},
-                    {"id": "T1595", "name": "Active Scanning", "module": "Bifrost", "status": "active"}
-                ]
-            },
-            {
-                "id": "TA0001",
-                "name": "Initial Access",
-                "techniques": [
-                    {"id": "T1190", "name": "Exploit Public-Facing Application", "module": "Bifrost / Fenrir", "status": "monitored"}
-                ]
-            },
-            {
-                "id": "TA0006",
-                "name": "Credential Access",
-                "techniques": [
-                    {"id": "T1110", "name": "Brute Force", "module": "Heimdall", "status": "active"},
-                    {"id": "T1110.001", "name": "Password Guessing", "module": "Heimdall", "status": "active"},
-                    {"id": "T1087.002", "name": "Domain Account Discovery", "module": "Yggdrasil", "status": "active"}
-                ]
-            },
-            {
-                "id": "TA0002",
-                "name": "Execution",
-                "techniques": [
-                    {"id": "T1059", "name": "Command and Scripting Interpreter", "module": "Mjolnir", "status": "monitored"}
-                ]
-            },
-            {
-                "id": "TA0005",
-                "name": "Defense Evasion",
-                "techniques": [
-                    {"id": "T1070", "name": "Indicator Removal", "module": "Mjolnir", "status": "monitored"}
-                ]
+                    {
+                        "id": t["id"],
+                        "name": t["name"],
+                        "module": " / ".join(t["modules"]),
+                        "status": t.get("status", "monitored"),
+                    }
+                    for t in sorted(techs, key=lambda x: x["id"])
+                ],
             }
+            for tactic, techs in sorted(by_tactic.items())
         ]
     }
+
+
+@router.get("/api/v1/dashboard/mitre-matrix")
+def get_dashboard_mitre_matrix():
+    """Dashboard variant of the MITRE matrix — same single source of truth
+    (core.mitre), previously a separate inline endpoint in server.py."""
+    from core.mitre import get_mitre_coverage
+    return get_mitre_coverage()
 
 @router.get("/api/v1/bifrost/topology")
 def get_bifrost_topology():

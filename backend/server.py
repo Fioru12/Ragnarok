@@ -848,73 +848,10 @@ async def get_status():
     }
 
 
-# --- Backup & restore (admin only) ---
+# --- Backup/restore & audit log live in routers/ops.py (same paths) ---
+from routers.ops import router as ops_router
+app.include_router(ops_router)
 
-class RestoreRequest(BaseModel):
-    backup_path: str
-
-
-@app.post("/api/v1/backup")
-def api_create_backup(user: dict = Depends(require_role("admin"))):
-    """Create a verified backup archive of all persistent state."""
-    import backup as backup_mod
-    try:
-        result = backup_mod.create_backup()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Backup failed: {e}")
-    record_audit_event({"type": "backup_create", "user": user["username"], "file": result["path"]})
-    return result
-
-
-@app.post("/api/v1/backup/verify")
-def api_verify_backup(req: RestoreRequest, user: dict = Depends(require_role("admin"))):
-    """Verify a backup archive against its sha256 manifest."""
-    import backup as backup_mod
-    try:
-        return backup_mod.verify_backup(req.backup_path)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@app.post("/api/v1/backup/restore")
-def api_restore_backup(req: RestoreRequest, user: dict = Depends(require_role("admin"))):
-    """Verify and restore a backup archive to the live stores."""
-    import backup as backup_mod
-    try:
-        result = backup_mod.restore_backup(req.backup_path)
-    except Exception as e:
-        record_audit_event({"type": "backup_restore", "user": user["username"], "success": False, "error": str(e)})
-        raise HTTPException(status_code=400, detail=str(e))
-    record_audit_event({"type": "backup_restore", "user": user["username"], "success": True, "file": req.backup_path})
-    return result
-
-
-@app.get("/api/v1/audit-log")
-def get_audit_log(limit: int = 50, offset: int = 0, user: dict = Depends(require_role("admin"))):
-    limit = max(1, min(limit, 500))
-    offset = max(0, offset)
-    conn = sqlite3.connect(AUDIT_DB_PATH)
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT id, timestamp, type, payload FROM events ORDER BY id DESC LIMIT ? OFFSET ?",
-            (limit, offset),
-        )
-        rows = cur.fetchall()
-        cur.execute("SELECT COUNT(*) FROM events")
-        total = cur.fetchone()[0]
-    finally:
-        conn.close()
-
-    events = []
-    for row_id, ts, ev_type, payload in rows:
-        try:
-            parsed_payload = json.loads(payload) if payload else None
-        except (TypeError, ValueError):
-            parsed_payload = None
-        events.append({"id": row_id, "timestamp": ts, "type": ev_type, "payload": parsed_payload})
-
-    return {"events": events, "total": total, "limit": limit, "offset": offset}
 
 from routers.intel import router as intel_router
 app.include_router(intel_router)
@@ -1702,11 +1639,8 @@ async def rag_report_send_middleware(request: Request, call_next):
 # Enterprise v2.5 Endpoints: Metrics, Multi-Tenancy, Agents & MITRE
 # ---------------------------------------------------------------------------
 
-@app.get("/api/v1/dashboard/mitre-matrix")
-def mitre_matrix_endpoint():
-    """Returns MITRE ATT&CK coverage statistics for the suite."""
-    from core.mitre import get_mitre_coverage
-    return get_mitre_coverage()
+# NOTE: /api/v1/dashboard/mitre-matrix lives in routers/info.py
+# (get_dashboard_mitre_matrix, same core.mitre source as /api/v1/mitre/matrix).
 
 
 from routers.tenants_agents import router as tenants_agents_router
