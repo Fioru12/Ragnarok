@@ -212,7 +212,7 @@ def init_auth_db() -> None:
             conn.commit()
             print("=" * 70)
             print("[RAGNAROK] No users found -- created default admin account:")
-            print(f"[RAGNAROK]   username: admin")
+            print("[RAGNAROK]   username: admin")
             print(f"[RAGNAROK]   password: {pw}")
             print("[RAGNAROK] Change this password after first login!")
             print("=" * 70)

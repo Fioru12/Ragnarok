@@ -54,6 +54,7 @@ sys.path.insert(0, os.path.abspath(BACKEND_DIR))
 
 from fastapi.testclient import TestClient  # noqa: E402
 import server  # noqa: E402
+from routers.setup import SETUP_FIELDS  # noqa: E402
 
 client = TestClient(server.app)
 AUTH_HEADERS = {"X-API-Key": "test-key-for-pytest"}
@@ -328,7 +329,7 @@ def test_setup_rejects_unknown_field():
 
 
 def test_setup_save_and_status_roundtrip(monkeypatch):
-    for meta in server.SETUP_FIELDS.values():
+    for meta in SETUP_FIELDS.values():
         monkeypatch.delenv(meta["env"], raising=False)
 
     res = client.post(
@@ -352,7 +353,7 @@ def test_setup_save_and_status_roundtrip(monkeypatch):
 
 
 def test_setup_persists_across_reload(monkeypatch):
-    for meta in server.SETUP_FIELDS.values():
+    for meta in SETUP_FIELDS.values():
         monkeypatch.delenv(meta["env"], raising=False)
 
     client.post(

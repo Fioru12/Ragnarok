@@ -9,7 +9,7 @@ import re
 import asyncio
 import urllib.request
 import urllib.error
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends, Request
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
@@ -292,7 +292,7 @@ def _compute_security_score(collections: Dict[str, int]) -> Dict[str, Any]:
 
 # --- Setup wizard endpoints live in routers/setup.py (same paths).
 # SETUP_FIELDS is re-exported here (tests read server.SETUP_FIELDS).
-from routers.setup import router as setup_router, SETUP_FIELDS
+from routers.setup import router as setup_router
 app.include_router(setup_router)
 
 # Auto-detect ASGARD_ROOT relative to backend directory or fallback to environment variable
