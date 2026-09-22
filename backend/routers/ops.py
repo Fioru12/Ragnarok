@@ -261,7 +261,9 @@ def metrics():
     try:
         if _srv.rag_indexer:
             stats = _srv.rag_indexer.get_stats()
-            lines.append("asgard_rag_documents_total %d" % stats.get("total_documents", 0))
+            # get_stats() returns {collection_name: count}; total = sum.
+            total = sum(v for v in stats.values() if isinstance(v, int))
+            lines.append("asgard_rag_documents_total %d" % total)
         else:
             lines.append("asgard_rag_documents_total 0")
     except Exception:

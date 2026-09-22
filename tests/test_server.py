@@ -2105,6 +2105,25 @@ def test_metrics_expose_rag_documents():
     assert "asgard_rag_documents_total" in res.text
 
 
+def test_metrics_rag_documents_matches_collection_sum(monkeypatch):
+    """asgard_rag_documents_total must equal the sum of collection counts, not 0."""
+    monkeypatch.setattr(
+        server, "rag_indexer",
+        _StubIndexer({
+            "heimdall_alerts": 5, "fenrir_ioc": 2,
+            "mjolnir_triage": 0, "bifrost_scans": 3,
+            "forseti_compliance": 1, "sleipnir_playbooks": 2,
+        }),
+    )
+    res = client.get("/metrics")
+    for line in res.text.splitlines():
+        if line.startswith("asgard_rag_documents_total "):
+            reported = int(line.split(" ", 1)[1])
+            assert reported == 13, "metric mismatch: %d != 13" % reported
+            return
+    raise AssertionError("asgard_rag_documents_total metric not found")
+
+
 def test_metrics_expose_backup_age():
     """Metrics include backup age when backups exist."""
     # Create a fake backup (absolute path: metrics resolves <backend>/backups
