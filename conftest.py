@@ -47,6 +47,17 @@ os.environ.setdefault("RAGNAROK_AUTH_SECRET", "test-secret-do-not-use-in-prod")
 os.environ.setdefault("RAGNAROK_SESSION_TTL", "3600")
 _ensure_temp_path("RAGNAROK_AUDIT_DB_PATH", "ragnarok_audit_test_", ".db")
 
+# Same for the vector DB: server.py instantiates chromadb.PersistentClient
+# at import time, and every EmFolder/AsgardIndexer test creates one on the
+# same path. Keeping it on the REAL default (.asgard-suite-repo/rag_db)
+# makes combined/isolated runs intermittently hang waiting for the SQLite
+# lock whenever a dev server (or the Dockerized Ragnarök) is running with
+# that directory open. Isolate it to a throwaway temp dir per session.
+if "ASGARD_RAG_DB_PATH" not in os.environ:
+    _rag_dir = tempfile.mkdtemp(prefix="ragnarok_rag_test_")
+    os.rmdir(_rag_dir)  # let chromadb create it with its own permissions
+    os.environ["ASGARD_RAG_DB_PATH"] = _rag_dir
+
 # Same for the setup wizard's persisted env file: never touch a real one.
 _setup_path = _ensure_temp_path("RAGNAROK_SETUP_ENV_PATH", "ragnarok_setup_test_", ".env")
 try:
