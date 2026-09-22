@@ -1,7 +1,17 @@
 import os
 import sys
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "scripts")))
+import pytest
+
+# Questi test coprono gli script del SUPER-project (scripts/*.py), che non
+# esistono nel checkout standalone di Ragnarok (repo separato, CI propria):
+# in quel caso skip invece di collection error. Nel contesto suite Asgard
+# (scripts/ presente) girano normalmente.
+_SCRIPTS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "scripts"))
+if not os.path.isdir(_SCRIPTS_DIR):
+    pytest.skip("superproject scripts/ assente (checkout Ragnarok standalone)", allow_module_level=True)
+
+sys.path.insert(0, _SCRIPTS_DIR)
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
 
 import rotate_keys
