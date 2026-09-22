@@ -85,6 +85,10 @@ def save_setup(req: SetupRequest, user: dict = Depends(require_role("admin"))):
                 current = os.environ.get(meta["env"], "")
                 if current:
                     f.write(f"{meta['env']}={current}\n")
+        try:
+            os.chmod(SETUP_ENV_PATH, 0o600)
+        except OSError:
+            pass  # best-effort (e.g. unsupported on this filesystem); write already succeeded
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"Saved in memory but failed to persist to disk: {e}")
 

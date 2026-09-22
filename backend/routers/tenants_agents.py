@@ -66,6 +66,7 @@ def post_agent_register(req: AgentRegisterRequest):
 
 class AgentHeartbeatRequest(BaseModel):
     agent_id: str
+    agent_secret: str
     status: str = "active"
     metrics: Optional[Dict[str, Any]] = None
 
@@ -74,9 +75,9 @@ class AgentHeartbeatRequest(BaseModel):
 def post_agent_heartbeat(req: AgentHeartbeatRequest):
     from auth import agent_heartbeat
     rules_json = json.dumps(req.metrics) if req.metrics else None
-    result = agent_heartbeat(agent_id=req.agent_id, status_str=req.status, rules_json=rules_json)
+    result = agent_heartbeat(agent_id=req.agent_id, agent_secret=req.agent_secret, status_str=req.status, rules_json=rules_json)
     if not result:
-        raise HTTPException(status_code=404, detail="Agent not registered")
+        raise HTTPException(status_code=401, detail="Unknown agent or invalid agent secret")
     return result
 
 

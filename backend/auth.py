@@ -120,7 +120,8 @@ def init_auth_db() -> None:
                 status TEXT NOT NULL DEFAULT 'active',
                 last_heartbeat REAL NOT NULL,
                 rules_json TEXT NOT NULL DEFAULT '{}',
-                created_at REAL NOT NULL
+                created_at REAL NOT NULL,
+                agent_secret TEXT
             );
 
             CREATE TABLE IF NOT EXISTS users (
@@ -178,6 +179,10 @@ def init_auth_db() -> None:
             conn.commit()
         if "auth_provider" not in cols:
             conn.execute("ALTER TABLE users ADD COLUMN auth_provider TEXT NOT NULL DEFAULT 'local'")
+            conn.commit()
+        agent_cols = {r[1] for r in conn.execute("PRAGMA table_info(agents)").fetchall()}
+        if "agent_secret" not in agent_cols:
+            conn.execute("ALTER TABLE agents ADD COLUMN agent_secret TEXT")
             conn.commit()
         if "oidc_sub" not in cols:
             # SQLite's ALTER TABLE ADD COLUMN rejects inline UNIQUE/PRIMARY KEY
@@ -610,7 +615,9 @@ def create_agent_token(tenant_id: int = 1, expires_in_seconds: int = 86400, crea
 
 
 def register_agent(token: str, agent_id: str, name: str, ip_address: str, os_type: str) -> Optional[Dict[str, Any]]:
-    """Register a new agent using a valid enrollment token."""
+    """Register a new agent using a valid enrollment token. Issues a per-agent
+    secret that must be presented on every subsequent heartbeat, so knowing
+    (or guessing) an agent_id alone is not enough to spoof its status."""
     conn = _connect()
     try:
         row = conn.execute(
@@ -619,37 +626,45 @@ def register_agent(token: str, agent_id: str, name: str, ip_address: str, os_typ
         ).fetchone()
         if not row or row["expires_at"] < time.time():
             return None
-        
+
         tenant_id = row["tenant_id"]
         now = time.time()
+        agent_secret = secrets.token_urlsafe(32)
         conn.execute(
-            """INSERT INTO agents (agent_id, name, tenant_id, ip_address, os_type, status, last_heartbeat, created_at)
-               VALUES (?, ?, ?, ?, ?, 'active', ?, ?)
+            """INSERT INTO agents (agent_id, name, tenant_id, ip_address, os_type, status, last_heartbeat, created_at, agent_secret)
+               VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?)
                ON CONFLICT(agent_id) DO UPDATE SET
                    name = excluded.name,
                    ip_address = excluded.ip_address,
                    os_type = excluded.os_type,
                    status = 'active',
-                   last_heartbeat = excluded.last_heartbeat""",
-            (agent_id, name, tenant_id, ip_address, os_type, now, now),
+                   last_heartbeat = excluded.last_heartbeat,
+                   agent_secret = excluded.agent_secret""",
+            (agent_id, name, tenant_id, ip_address, os_type, now, now, agent_secret),
         )
         # Consume token after successful use
         conn.execute("DELETE FROM agent_tokens WHERE token = ?", (token,))
         conn.commit()
-        return {"agent_id": agent_id, "tenant_id": tenant_id, "status": "active"}
+        return {"agent_id": agent_id, "tenant_id": tenant_id, "status": "active", "agent_secret": agent_secret}
     finally:
         conn.close()
 
 
-def agent_heartbeat(agent_id: str, status_str: str = "active", rules_json: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """Process heartbeat from an agent and return its assigned configuration."""
+def agent_heartbeat(agent_id: str, agent_secret: str = "", status_str: str = "active", rules_json: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Process heartbeat from an agent and return its assigned configuration.
+    Requires the per-agent secret issued at registration (compared with
+    hmac.compare_digest) so an attacker who only knows agent_id cannot
+    forge heartbeats or inject rules_json for another agent."""
     conn = _connect()
     try:
         now = time.time()
-        row = conn.execute("SELECT agent_id, tenant_id, rules_json FROM agents WHERE agent_id = ?", (agent_id,)).fetchone()
+        row = conn.execute("SELECT agent_id, tenant_id, rules_json, agent_secret FROM agents WHERE agent_id = ?", (agent_id,)).fetchone()
         if not row:
             return None
-        
+        expected_secret = row["agent_secret"] or ""
+        if not expected_secret or not hmac.compare_digest(agent_secret, expected_secret):
+            return None
+
         updates = ["status = ?", "last_heartbeat = ?"]
         params = [status_str, now]
         if rules_json:

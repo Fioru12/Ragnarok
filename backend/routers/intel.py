@@ -9,7 +9,9 @@ import os
 import time
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+
+from auth import require_role
 
 router = APIRouter(tags=["intel"])
 
@@ -20,7 +22,7 @@ ASGARD_ROOT = os.getenv(
 
 
 @router.get("/api/v1/reports")
-def list_reports():
+def list_reports(user: dict = Depends(require_role("admin", "analyst", "viewer"))):
     reports = []
     for pattern in [
         os.path.join(ASGARD_ROOT, "Mjolnir", "output", "*.md"),
@@ -38,7 +40,7 @@ def list_reports():
     return {"reports": reports}
 
 @router.get("/api/v1/reports/read")
-def read_report(path: str):
+def read_report(path: str, user: dict = Depends(require_role("admin", "analyst", "viewer"))):
     allowed_dirs = [
         os.path.realpath(os.path.join(ASGARD_ROOT, "Mjolnir", "output")),
         os.path.realpath(os.path.join(ASGARD_ROOT, "Yggdrasil", "reports")),
@@ -67,7 +69,7 @@ def read_report(path: str):
     return {"filename": os.path.basename(resolved_path), "content": content}
 
 @router.get("/api/v1/hunt")
-def threat_hunt(q: Optional[str] = ""):
+def threat_hunt(q: Optional[str] = "", user: dict = Depends(require_role("admin", "analyst", "viewer"))):
     db_path = os.path.join(ASGARD_ROOT, "Fenrir", "fenrir.db")
     if not os.path.exists(db_path):
         return {"results": [], "total": 0, "message": "Fenrir database not found. Run Fenrir update first."}
