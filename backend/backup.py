@@ -50,6 +50,72 @@ def _sha256_file(path: str) -> str:
     return h.hexdigest()
 
 
+def _retention_limits() -> Dict[str, int]:
+    """Limiti di retention letti da env (override in docker-compose).
+
+    BACKUP_KEEP_COUNT: max archivi da tenere (default 14).
+    BACKUP_RETENTION_DAYS: max età in giorni (default 30, 0 = disabilitato).
+    Valori non numerici o negativi -> default.
+    """
+    def _int(name: str, default: int) -> int:
+        try:
+            v = int(os.environ.get(name, str(default)))
+        except (TypeError, ValueError):
+            return default
+        return v if v >= 0 else default
+
+    return {
+        "keep_count": _int("BACKUP_KEEP_COUNT", 14),
+        "retention_days": _int("BACKUP_RETENTION_DAYS", 30),
+    }
+
+
+def prune_old_backups(output_dir: str = None) -> Dict[str, Any]:
+    """Cancella i backup eccedenti la retention. Non fallisce mai rumorosamente
+    oltre un dict: ritorna {kept, pruned: [nomi], dir}.
+
+    Ordine: per mtime crescente (i più vecchi prima). Si applicano in AND:
+      1) età > BACKUP_RETENTION_DAYS (se > 0)
+      2) eccedenza oltre BACKUP_KEEP_COUNT (se > 0)
+    """
+    if output_dir is None:
+        output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "backups")
+    if not os.path.isdir(output_dir):
+        return {"kept": 0, "pruned": [], "dir": output_dir}
+    limits = _retention_limits()
+    cands = []
+    for name in os.listdir(output_dir):
+        if not name.endswith(".zip"):
+            continue
+        full = os.path.join(output_dir, name)
+        try:
+            cands.append((os.path.getmtime(full), name, full))
+        except OSError:
+            continue
+    cands.sort()  # vecchi -> recenti
+    now = time.time()
+    to_prune = set()
+    if limits["retention_days"] > 0:
+        cutoff = now - limits["retention_days"] * 86400
+        for mtime, name, _full in cands:
+            if mtime < cutoff:
+                to_prune.add(name)
+    if limits["keep_count"] > 0 and len(cands) > limits["keep_count"]:
+        excess = len(cands) - limits["keep_count"]
+        for _mtime, name, _full in cands[:excess]:
+            to_prune.add(name)
+    pruned = []
+    for _mtime, name, full in cands:
+        if name in to_prune:
+            try:
+                os.remove(full)
+                pruned.append(name)
+            except OSError:
+                continue
+    kept = len(cands) - len(pruned)
+    return {"kept": kept, "pruned": pruned, "dir": output_dir}
+
+
 def create_backup(output_dir: str = None) -> Dict[str, Any]:
     """
     Create a verified backup archive. Returns {path, files, bytes, stores}.
@@ -95,11 +161,19 @@ def create_backup(output_dir: str = None) -> Dict[str, Any]:
                 files += 1
         zf.writestr(MANIFEST_NAME, json.dumps(manifest, indent=2))
 
+    # Retention automatica: evita crescita infinita di backups/ (P0).
+    # Mai fatale: se la prune fallisce, il backup resta valido comunque.
+    try:
+        pruning = prune_old_backups(output_dir)
+    except Exception:
+        pruning = {"kept": 0, "pruned": [], "dir": output_dir}
+
     return {
         "path": zip_path,
         "files": files,
         "bytes": os.path.getsize(zip_path),
         "stores": [s["label"] for s in stores],
+        "pruned": pruning["pruned"],
     }
 
 
