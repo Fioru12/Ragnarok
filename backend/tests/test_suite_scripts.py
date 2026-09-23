@@ -54,5 +54,5 @@ def test_suite_backup_roundtrip(tmp_path, monkeypatch):
         ("fenrir_db", "Fenrir/fenrir.db"),
     ])
     out = tmp_path / "out"
-    res = suite_backup.create_suite_backup(str(out), keep=2)
+    res = suite_backup.create_suite_backup(str(out), keep=2, root=str(root))
     assert suite_backup.verify_suite_backup(res["path"])["verified"] is True
